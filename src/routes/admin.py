@@ -102,14 +102,12 @@ def update_zone_state(zone_name):
             }), 400
         
         admin_username = session.get('admin_username', 'admin')
-        # Actualizar la zona y obtener el diccionario resultante.  La
-        # función update_zone_state() ya devuelve un dict, por lo que
-        # no es necesario llamar a to_dict() aquí.
         updated_zone = ZoneState.update_zone_state(zone_name, new_state, admin_username, notes)
+        
         return jsonify({
             'success': True,
             'message': f'Estado de {zone_name} actualizado a {new_state}',
-            'zone': updated_zone
+            'zone': updated_zone.to_dict()
         }), 200
         
     except Exception as e:
@@ -143,13 +141,12 @@ def create_zone():
             }), 409
         
         admin_username = session.get('admin_username', 'admin')
-        # Crear la zona y obtener el diccionario resultante.  La función
-        # update_zone_state() devuelve un dict serializable.
         new_zone = ZoneState.update_zone_state(zone_name, state, admin_username, notes)
+        
         return jsonify({
             'success': True,
             'message': f'Zona {zone_name} creada exitosamente',
-            'zone': new_zone
+            'zone': new_zone.to_dict()
         }), 201
         
     except Exception as e:
