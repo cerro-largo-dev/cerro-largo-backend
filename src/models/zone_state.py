@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, session
-from models.zone_state import ZoneState, db
+from src.models.zone_state import ZoneState
 from datetime import datetime
 import hashlib
 
