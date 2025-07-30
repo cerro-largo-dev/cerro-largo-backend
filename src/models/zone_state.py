@@ -45,8 +45,17 @@ class ZoneState(db.Model):
         return result
     
     @staticmethod
-    def update_zone_state(zone_name, state, updated_by=None, notes=None):
-        """Actualizar o crear el estado de una zona"""
+    def update_zone_state(zone_name, state, updated_by=None, notes=None) -> dict:
+        """
+        Actualizar o crear el estado de una zona y devolver un
+        diccionario serializable del resultado.  Anteriormente esta
+        función devolvía una instancia de ``ZoneState``, lo que podía
+        causar errores de serialización JSON cuando el valor era
+        devuelto directamente en una respuesta de API.  Ahora se
+        devuelve siempre un diccionario mediante ``to_dict()``, por lo
+        que cualquier llamada a ``update_zone_state`` obtiene un
+        objeto listo para ser serializado.
+        """
         zone = ZoneState.query.filter_by(zone_name=zone_name).first()
         if zone:
             zone.state = state
@@ -63,7 +72,9 @@ class ZoneState(db.Model):
             db.session.add(zone)
         
         db.session.commit()
-        return zone
+        # Devolver la representación en diccionario para facilitar
+        # la serialización JSON
+        return zone.to_dict()
     
     def __repr__(self):
         return f'<ZoneState {self.zone_name}: {self.state}>'
