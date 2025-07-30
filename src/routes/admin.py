@@ -8,19 +8,9 @@ admin_bp = Blueprint('admin', __name__)
 # Contraseña del administrador (en producción debería estar en variables de entorno)
 ADMIN_PASSWORD = "cerrolargo2025"
 
-
-
 def hash_password(password):
     """Hash de la contraseña para mayor seguridad"""
     return hashlib.sha256(password.encode()).hexdigest()
-
-
-
-
-
-
-
-
 
 @admin_bp.route('/login', methods=['POST'])
 def admin_login():
@@ -28,19 +18,9 @@ def admin_login():
     try:
         data = request.get_json()
         password = data.get('password', '')
-
-
+        
         if password == ADMIN_PASSWORD:
-
-
-
-
-
-
-
-
             session['admin_authenticated'] = True
-
             return jsonify({
                 'success': True,
                 'message': 'Autenticación exitosa'
@@ -50,7 +30,7 @@ def admin_login():
                 'success': False,
                 'message': 'Contraseña incorrecta'
             }), 401
-
+            
     except Exception as e:
         return jsonify({
             'success': False,
@@ -61,7 +41,6 @@ def admin_login():
 def admin_logout():
     """Cerrar sesión del administrador"""
     session.pop('admin_authenticated', None)
-
     return jsonify({
         'success': True,
         'message': 'Sesión cerrada'
@@ -92,13 +71,10 @@ def get_zone_states():
     """Obtener todos los estados de las zonas"""
     try:
         states = ZoneState.get_all_states()
-
-
         return jsonify({
             'success': True,
             'states': states
         }), 200
-
     except Exception as e:
         return jsonify({
             'success': False,
@@ -119,24 +95,21 @@ def update_zone_state():
                 'success': False,
                 'message': 'Nombre de zona y estado son requeridos'
             }), 400
-
+        
         if state not in ['green', 'yellow', 'red']:
             return jsonify({
                 'success': False,
                 'message': 'Estado debe ser green, yellow o red'
             }), 400
-
+        
         updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
         
-
-
-
         return jsonify({
             'success': True,
             'message': 'Estado actualizado correctamente',
             'zone': updated_zone
         }), 200
-
+        
     except Exception as e:
         return jsonify({
             'success': False,
@@ -150,15 +123,13 @@ def bulk_update_zones():
     try:
         data = request.get_json()
         updates = data.get('updates', [])
-
-
-
+        
         if not updates:
             return jsonify({
                 'success': False,
                 'message': 'No se proporcionaron actualizaciones'
             }), 400
-
+        
         updated_zones = []
         for update in updates:
             zone_name = update.get('zone_name')
@@ -199,17 +170,12 @@ def generate_report():
             'state_summary': state_counts,
             'zones': states
         }
-
-
-
-
-
+        
         return jsonify({
             'success': True,
             'report': report_data
         }), 200
-
-
+        
     except Exception as e:
         return jsonify({
             'success': False,
