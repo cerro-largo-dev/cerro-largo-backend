@@ -1,4 +1,13 @@
-from .user import db
+"""
+Modelo que almacena el estado de cada zona o municipio.
+
+Se importa la instancia global `db` desde el paquete `src.models`
+en lugar de desde `user` para evitar instanciar SQLAlchemy
+múltiples veces.  Todos los modelos deben usar la misma
+instancia de `db`.
+"""
+
+from . import db
 from datetime import datetime
 
 class ZoneState(db.Model):
@@ -36,26 +45,15 @@ class ZoneState(db.Model):
         return result
     
     @staticmethod
-    def update_zone_state(zone_name, state, updated_by=None, notes=None) -> dict:
-        """
-        Actualizar o crear el estado de una zona.
-
-        Este método busca una instancia de ``ZoneState`` con el nombre de zona
-        proporcionado. Si existe, actualiza sus campos; si no existe, crea una
-        nueva instancia y la agrega a la sesión. Tras hacer ``commit`` en la
-        base de datos, se devuelve un diccionario serializable con los datos de
-        la zona. Devolver un ``dict`` en lugar de un modelo evita problemas
-        de serialización JSON en las vistas que consumen este método.
-        """
+    def update_zone_state(zone_name, state, updated_by=None, notes=None):
+        """Actualizar o crear el estado de una zona"""
         zone = ZoneState.query.filter_by(zone_name=zone_name).first()
         if zone:
-            # Actualizar campos existentes
             zone.state = state
             zone.updated_by = updated_by
             zone.updated_at = datetime.utcnow()
             zone.notes = notes
         else:
-            # Crear una nueva instancia si la zona no existe
             zone = ZoneState(
                 zone_name=zone_name,
                 state=state,
@@ -63,12 +61,9 @@ class ZoneState(db.Model):
                 notes=notes
             )
             db.session.add(zone)
-
-        # Confirmar cambios en la base de datos
+        
         db.session.commit()
-
-        # Devolver un diccionario para facilitar la serialización JSON
-        return zone.to_dict()
+        return zone
     
     def __repr__(self):
         return f'<ZoneState {self.zone_name}: {self.state}>'
