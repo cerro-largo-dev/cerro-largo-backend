@@ -1,12 +1,3 @@
-    """
-Modelo que almacena el estado de cada zona o municipio.
-
-Se importa la instancia global `db` desde el paquete `src.models`
-en lugar de desde `user` para evitar instanciar SQLAlchemy
-múltiples veces.  Todos los modelos deben usar la misma
-instancia de `db`.
-"""
-
 from . import db
 from datetime import datetime
 
