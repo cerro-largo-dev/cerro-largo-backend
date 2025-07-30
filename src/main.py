@@ -1,3 +1,4 @@
+@@ -1,46 +1,73 @@
 import os
 import sys
 # DON'T CHANGE THIS !!!
@@ -6,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
+from src.models.user import db
 
 # Importar la instancia global de base de datos y el modelo ZoneState.
 from src.models import db
@@ -14,18 +16,23 @@ from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 
+app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = 'cerro_largo_secret_key_2025'
 
+# Habilitar CORS para todas las rutas
 # Habilitar CORS para todas las rutas (permitir credenciales y cualquier origen).
 CORS(app, supports_credentials=True, origins="*")
 
+# Registrar blueprints
 # Registrar los blueprints de la API
 app.register_blueprint(user_bp, url_prefix='/api')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(report_bp, url_prefix='/api/report')
 
+# Configuración de base de datos
+app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
 # Configuración de la base de datos
 # El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
 # por lo que calculamos la ruta subiendo un nivel desde __file__.
@@ -41,6 +48,7 @@ os.makedirs(os.path.join(base_dir, 'database'), exist_ok=True)
 with app.app_context():
     db.create_all()
 
+# Ruta de salud para Render
     # Inicializar los estados predeterminados de los municipios si la tabla está vacía
     if ZoneState.query.count() == 0:
         municipios_default = [
@@ -67,20 +75,17 @@ def health_check():
 def serve(path):
     static_folder_path = app.static_folder
     if static_folder_path is None:
+            return "Static folder not configured", 404
         return "Static folder not configured", 404
 
     if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
         return send_from_directory(static_folder_path, path)
-    else:
-        index_path = os.path.join(static_folder_path, 'index.html')
-        if os.path.exists(index_path):
-            return send_from_directory(static_folder_path, 'index.html')
-        else:
-            return "index.html not found", 404
-
+@@ -54,5 +81,6 @@ def serve(path):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
     # Ejecutar en modo debug salvo que FLASK_ENV indique producción
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
     app.run(host='0.0.0.0', port=port, debug=debug_mode)
