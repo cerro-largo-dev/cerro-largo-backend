@@ -1,23 +1,40 @@
-"""
-Modelo de usuario de la aplicación.
+from flask import Blueprint, request, jsonify, session
+from src.models.zone_state import ZoneState
 
-Importa la instancia `db` desde el paquete `src.models` para
-compartir la misma conexión a base de datos en toda la aplicación.
-"""
+user_bp = Blueprint('user', __name__)
 
-from datetime import datetime
+@user_bp.route('/zones', methods=['GET'])
+def get_zones():
+    """Obtener todos los estados de zonas - disponible para todos los usuarios"""
+    try:
+        states = ZoneState.get_all_states()
+        return jsonify({
+            'success': True,
+            'zones': states
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error al obtener zonas: {str(e)}'
+        }), 500
 
-# Importar la instancia global de SQLAlchemy definida en src/models/__init__.py
-from . import db
-
-class User(db.Model):
-    __tablename__ = 'users'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(20), default='user')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    def __repr__(self):
-        return f'<User {self.username}>'
+@user_bp.route('/zones/<zone_name>', methods=['GET'])
+def get_zone_state(zone_name):
+    """Obtener el estado de una zona específica"""
+    try:
+        zone = ZoneState.query.filter_by(zone_name=zone_name).first()
+        if zone:
+            return jsonify({
+                'success': True,
+                'zone': zone.to_dict()
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Zona no encontrada'
+            }), 404
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error al obtener zona: {str(e)}'
+        }), 500
