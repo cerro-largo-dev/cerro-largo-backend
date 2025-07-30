@@ -1,27 +1,25 @@
+"""
+Modelo que almacena el estado de cada zona o municipio.
+
+Se importa la instancia global `db` desde el paquete `src.models`
+en lugar de desde `user` para evitar instanciar SQLAlchemy
+múltiples veces.  Todos los modelos deben usar la misma
+instancia de `db`.
+"""
+
 from . import db
 from datetime import datetime
 
 class ZoneState(db.Model):
-    """
-    Modelo que almacena el estado de cada zona o municipio.
-
-    Esta versión fue la primera modificación que realicé al fichero. Se
-    cambió la importación de ``db`` para usar la instancia global
-    definida en ``src.models.__init__`` y se ajustó el método
-    ``update_zone_state`` para devolver un diccionario en lugar de
-    una instancia de SQLAlchemy. De este modo, las respuestas de la
-    API pueden serializarse a JSON sin errores.
-    """
-
     __tablename__ = 'zone_states'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     zone_name = db.Column(db.String(100), unique=True, nullable=False)
     state = db.Column(db.String(20), nullable=False, default='green')  # green, yellow, red
     updated_by = db.Column(db.String(100), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
     notes = db.Column(db.Text, nullable=True)
-
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -31,7 +29,7 @@ class ZoneState(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'notes': self.notes
         }
-
+    
     @staticmethod
     def get_all_states():
         """Obtener todos los estados de zonas como diccionario"""
@@ -45,19 +43,18 @@ class ZoneState(db.Model):
                 'notes': zone.notes
             }
         return result
-
+    
     @staticmethod
     def update_zone_state(zone_name, state, updated_by=None, notes=None) -> dict:
         """
-        Actualizar o crear el estado de una zona.
-
-        Este método busca una instancia existente de ``ZoneState`` por
-        ``zone_name``. Si se encuentra, actualiza sus campos; si no,
-        crea una nueva instancia. Tras confirmar los cambios en la base
-        de datos, devuelve un diccionario con la representación de la
-        zona. Devolver un ``dict`` en lugar de la instancia de
-        SQLAlchemy facilita la serialización JSON en las respuestas de
-        la API.
+        Actualizar o crear el estado de una zona y devolver un
+        diccionario serializable del resultado.  Anteriormente esta
+        función devolvía una instancia de ``ZoneState``, lo que podía
+        causar errores de serialización JSON cuando el valor era
+        devuelto directamente en una respuesta de API.  Ahora se
+        devuelve siempre un diccionario mediante ``to_dict()``, por lo
+        que cualquier llamada a ``update_zone_state`` obtiene un
+        objeto listo para ser serializado.
         """
         zone = ZoneState.query.filter_by(zone_name=zone_name).first()
         if zone:
@@ -73,10 +70,11 @@ class ZoneState(db.Model):
                 notes=notes
             )
             db.session.add(zone)
-
+        
         db.session.commit()
-
+        # Devolver la representación en diccionario para facilitar
+        # la serialización JSON
         return zone.to_dict()
-
+    
     def __repr__(self):
         return f'<ZoneState {self.zone_name}: {self.state}>'
