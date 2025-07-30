@@ -9,7 +9,7 @@ from flask_cors import CORS
 
 # Importar la instancia global de base de datos y el modelo ZoneState.
 from src.models import db
-from models.zone_state import ZoneState
+from src.models.zone_state import ZoneState
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
