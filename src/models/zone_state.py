@@ -1,13 +1,4 @@
-"""
-Modelo que almacena el estado de cada zona o municipio.
-
-Se importa la instancia global `db` desde el paquete `src.models`
-en lugar de desde `user` para evitar instanciar SQLAlchemy
-múltiples veces.  Todos los modelos deben usar la misma
-instancia de `db`.
-"""
-
-from . import db
+from .user import db
 from datetime import datetime
 
 class ZoneState(db.Model):
@@ -45,17 +36,8 @@ class ZoneState(db.Model):
         return result
     
     @staticmethod
-    def update_zone_state(zone_name, state, updated_by=None, notes=None) -> dict:
-        """
-        Actualizar o crear el estado de una zona y devolver un
-        diccionario serializable del resultado.  Anteriormente esta
-        función devolvía una instancia de ``ZoneState``, lo que podía
-        causar errores de serialización JSON cuando el valor era
-        devuelto directamente en una respuesta de API.  Ahora se
-        devuelve siempre un diccionario mediante ``to_dict()``, por lo
-        que cualquier llamada a ``update_zone_state`` obtiene un
-        objeto listo para ser serializado.
-        """
+    def update_zone_state(zone_name, state, updated_by=None, notes=None):
+        """Actualizar o crear el estado de una zona"""
         zone = ZoneState.query.filter_by(zone_name=zone_name).first()
         if zone:
             zone.state = state
@@ -72,9 +54,7 @@ class ZoneState(db.Model):
             db.session.add(zone)
         
         db.session.commit()
-        # Devolver la representación en diccionario para facilitar
-        # la serialización JSON
-        return zone.to_dict()
+        return zone
     
     def __repr__(self):
         return f'<ZoneState {self.zone_name}: {self.state}>'
