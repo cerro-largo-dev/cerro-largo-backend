@@ -15,9 +15,8 @@ from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
-app = Flask(__name__, static_folder='static')
+app = Flask(__name__, static_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend', 'dist'))
 app.config['SECRET_KEY'] = 'cerro_largo_secret_key_2025'
-
 # Habilitar CORS para todas las rutas (permitir credenciales y cualquier origen).
 CORS(app, supports_credentials=True, origins="*")
 
