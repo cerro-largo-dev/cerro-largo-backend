@@ -104,11 +104,11 @@ def update_zone_state():
         
         updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
         
-        return jsonify({
-            'success': True,
-            'message': 'Estado actualizado correctamente',
-            'zone': updated_zone
-        }), 200
+            return jsonify({
+                'success': True,
+                'message': 'Estado actualizado correctamente',
+                'zone': updated_zone.to_dict()
+            }), 200
         
     except Exception as e:
         return jsonify({
@@ -137,7 +137,7 @@ def bulk_update_zones():
             
             if zone_name and state and state in ['green', 'yellow', 'red']:
                 updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
-                updated_zones.append(updated_zone)
+                updated_zones.append(updated_zone.to_dict())
         
         return jsonify({
             'success': True,
