@@ -42,18 +42,18 @@ with app.app_context():
     db.create_all()
 
     # Inicializar los estados predeterminados de los municipios si la tabla está vacía
-    if ZoneState.query.count() == 0:
-        municipios_default = [
-            'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
-            'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
-            'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
-            'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
-        ]
+    # if ZoneState.query.count() == 0:
+    #     municipios_default = [
+    #         'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
+    #         'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
+    #         'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
+    #         'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
+    #     ]
 
-        for municipio in municipios_default:
-            ZoneState.update_zone_state(municipio, 'green', 'sistema')
+    #     for municipio in municipios_default:
+    #         ZoneState.update_zone_state(municipio, 'green', 'sistema')
 
-        print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
+    #     print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
 # Ruta de salud para verificar que el servicio está activo
 @app.route('/api/health')
