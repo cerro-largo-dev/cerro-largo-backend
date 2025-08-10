@@ -28,10 +28,16 @@ def crear_reporte():
         if not descripcion:
             return jsonify({'error': 'La descripción es obligatoria'}), 400
         
-        # Convertir coordenadas a float si están presentes
+        # Validación de coordenadas
         try:
             latitud = float(latitud) if latitud else None
             longitud = float(longitud) if longitud else None
+
+            if latitud is not None and (latitud < -90 or latitud > 90):
+                return jsonify({'error': 'Latitud fuera de rango'}), 400
+
+            if longitud is not None and (longitud < -180 or longitud > 180):
+                return jsonify({'error': 'Longitud fuera de rango'}), 400
         except (ValueError, TypeError):
             latitud = None
             longitud = None
@@ -58,24 +64,34 @@ def crear_reporte():
             
             for foto in fotos:
                 if foto and foto.filename and allowed_file(foto.filename):
-                    # Generar nombre único para el archivo
-                    extension = foto.filename.rsplit('.', 1)[1].lower()
-                    nombre_unico = f"{uuid.uuid4().hex}.{extension}"
-                    nombre_seguro = secure_filename(nombre_unico)
-                    
-                    # Guardar archivo
-                    ruta_archivo = os.path.join(upload_dir, nombre_seguro)
-                    foto.save(ruta_archivo)
-                    
-                    # Crear registro en la base de datos
-                    foto_reporte = FotoReporte(
-                        reporte_id=nuevo_reporte.id,
-                        nombre_archivo=foto.filename,
-                        ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
-                    )
-                    
-                    db.session.add(foto_reporte)
-                    fotos_guardadas.append(foto_reporte.to_dict())
+                    try:
+                        # Verificar tamaño del archivo
+                        if len(foto.read()) > MAX_FILE_SIZE:
+                            return jsonify({'error': 'El archivo es demasiado grande'}), 400
+                        foto.seek(0)  # Volver a posicionar el cursor al inicio del archivo
+
+                        # Generar nombre único para el archivo
+                        extension = foto.filename.rsplit('.', 1)[1].lower()
+                        nombre_unico = f"{uuid.uuid4().hex}.{extension}"
+                        nombre_seguro = secure_filename(nombre_unico)
+                        
+                        # Guardar archivo
+                        ruta_archivo = os.path.join(upload_dir, nombre_seguro)
+                        foto.save(ruta_archivo)
+                        
+                        # Crear registro en la base de datos
+                        foto_reporte = FotoReporte(
+                            reporte_id=nuevo_reporte.id,
+                            nombre_archivo=foto.filename,
+                            ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
+                        )
+                        
+                        db.session.add(foto_reporte)
+                        fotos_guardadas.append(foto_reporte.to_dict())
+
+                    except Exception as e:
+                        current_app.logger.error(f"Error al guardar foto: {str(e)}")
+                        return jsonify({'error': 'Error al guardar las fotos'}), 500
         
         # Confirmar transacción
         db.session.commit()
@@ -130,6 +146,7 @@ def crear_reporte():
         current_app.logger.error(f"Error al crear reporte: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
 
+
 @reportes_bp.route('/reportes', methods=['GET'])
 def obtener_reportes():
     try:
@@ -161,6 +178,7 @@ def obtener_reportes():
         current_app.logger.error(f"Error al obtener reportes: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
 
+
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['GET'])
 def obtener_reporte(reporte_id):
     try:
@@ -170,6 +188,7 @@ def obtener_reporte(reporte_id):
     except Exception as e:
         current_app.logger.error(f"Error al obtener reporte {reporte_id}: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
+
 
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['DELETE'])
 def eliminar_reporte(reporte_id):
@@ -194,3 +213,25 @@ def eliminar_reporte(reporte_id):
         return jsonify({'error': 'Error interno del servidor'}), 500
 
 
+# Agregar la función `to_dict` a los modelos si no la tienes ya definida
+
+class Reporte(db.Model):
+    # Tu código del modelo Reporte
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'descripcion': self.descripcion,
+            'nombre_lugar': self.nombre_lugar,
+            'latitud': self.latitud,
+            'longitud': self.longitud,
+            'fecha_creacion': self.fecha_creacion.isoformat(),
+        }
+
+class FotoReporte(db.Model):
+    # Tu código del modelo FotoReporte
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'nombre_archivo': self.nombre_archivo,
+            'ruta_archivo': self.ruta_archivo,
+        }
