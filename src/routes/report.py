@@ -209,4 +209,3 @@ def generate_report_data():
             'success': False,
             'message': f'Error al generar datos del reporte: {str(e)}'
         }), 500
-
