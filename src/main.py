@@ -13,6 +13,7 @@ from src.models.zone_state import ZoneState
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
+from src.routes.reportes import reportes_bp
 
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
 app = Flask(__name__, static_folder="../static")
@@ -20,9 +21,10 @@ app.config["SECRET_KEY"] = "cerro_largo_secret_key_2025"
 CORS(app, supports_credentials=True, origins="*")
 
 # Registrar los blueprints de la API
-app.register_blueprint(user_bp, url_prefix='/api')
-app.register_blueprint(admin_bp, url_prefix='/api/admin')
-app.register_blueprint(report_bp, url_prefix='/api/report')
+app.register_blueprint(user_bp, url_prefix="/api")
+app.register_blueprint(admin_bp, url_prefix="/api/admin")
+app.register_blueprint(report_bp, url_prefix="/api/report")
+app.register_blueprint(reportes_bp, url_prefix="/api")
 
 # Configuración de la base de datos
 # El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
@@ -54,14 +56,14 @@ with app.app_context():
     #     print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
 # Ruta de salud para verificar que el servicio está activo
-@app.route('/api/health')
+@app.route("/api/health")
 def health_check():
     return jsonify({'status': 'healthy', 'service': 'cerro-largo-backend'}), 200
 
 
 # Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
+@app.route("/", defaults={'path': ''})
+@app.route("/<path:path>")
 def serve(path):
     static_folder_path = app.static_folder
     if static_folder_path is None:
@@ -70,15 +72,16 @@ def serve(path):
     if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
         return send_from_directory(static_folder_path, path)
     else:
-        index_path = os.path.join(static_folder_path, 'index.html')
+        index_path = os.path.join(static_folder_path, "index.html")
         if os.path.exists(index_path):
-            return send_from_directory(static_folder_path, 'index.html')
+            return send_from_directory(static_folder_path, "index.html")
         else:
             return "index.html not found", 404
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
     # Ejecutar en modo debug salvo que FLASK_ENV indique producción
-    debug_mode = os.environ.get('FLASK_ENV') != 'production'
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+    debug_mode = os.environ.get("FLASK_ENV") != "production"
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)
+
