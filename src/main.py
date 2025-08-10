@@ -1,11 +1,10 @@
 import os
 import sys
-# DON'T CHANGE THIS !!!
-# Ajustar el sys.path para que la importación de módulos desde la raíz del proyecto sea correcta.
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
 from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
+
+# Ajustar el sys.path para que la importación de módulos desde la raíz del proyecto sea correcta.
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Importar la instancia global de base de datos y el modelo ZoneState.
 from src.models import db
@@ -42,18 +41,18 @@ with app.app_context():
     db.create_all()
 
     # Inicializar los estados predeterminados de los municipios si la tabla está vacía
-    # if ZoneState.query.count() == 0:
-    #     municipios_default = [
-    #         'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
-    #         'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
-    #         'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
-    #         'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
-    #     ]
+    if ZoneState.query.count() == 0:
+        municipios_default = [
+            'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
+            'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
+            'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
+            'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
+        ]
 
-    #     for municipio in municipios_default:
-    #         ZoneState.update_zone_state(municipio, 'green', 'sistema')
+        for municipio in municipios_default:
+            ZoneState.update_zone_state(municipio, 'green', 'sistema')
 
-    #     print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
+        print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
 # Ruta de salud para verificar que el servicio está activo
 @app.route("/api/health")
@@ -69,7 +68,8 @@ def serve(path):
     if static_folder_path is None:
         return "Static folder not configured", 404
 
-    if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
+    file_path = os.path.join(static_folder_path, path)
+    if path != "" and os.path.exists(file_path):
         return send_from_directory(static_folder_path, path)
     else:
         index_path = os.path.join(static_folder_path, "index.html")
@@ -78,10 +78,14 @@ def serve(path):
         else:
             return "index.html not found", 404
 
+# Manejo global de errores para capturar excepciones y devolver respuestas JSON consistentes
+@app.errorhandler(Exception)
+def handle_exception(e):
+    return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     # Ejecutar en modo debug salvo que FLASK_ENV indique producción
     debug_mode = os.environ.get("FLASK_ENV") != "production"
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
-
