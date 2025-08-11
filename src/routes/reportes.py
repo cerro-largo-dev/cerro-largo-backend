@@ -1,201 +1,188 @@
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
-from src.models.reporte import db, Reporte, FotoReporte
+from src.models.reportes import db, Reporte, FotoReporte
 from src.utils.email_service import EmailService
 import os
 import uuid
 
-reportes_bp = Blueprint('reportes', __name__)
+# Blueprint en /api
+reportes_bp = Blueprint('reportes', __name__, url_prefix='/api')
 
-# Configuración para subida de archivos
+# ---- Config subida de archivos ----
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
+MAX_FILE_SIZE = 16 * 1024 * 1024  # 16 MB
 
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def allowed_file(filename: str) -> bool:
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def ensure_upload_dir() -> str:
+    """Crea (si no existe) y retorna el directorio de uploads para reportes."""
+    base = current_app.static_folder
+    upload_dir = os.path.join(base, 'uploads', 'reportes')
+    os.makedirs(upload_dir, exist_ok=True)
+    return upload_dir
+
+# ---- Endpoints ----
 
 @reportes_bp.route('/reportes', methods=['POST'])
 def crear_reporte():
     try:
-        # Obtener datos del formulario
+        # Datos básicos
         descripcion = request.form.get('descripcion')
-        nombre_lugar = request.form.get('nombre_lugar', '')
+        nombre_lugar = request.form.get('nombre_lugar', '').strip() or None
         latitud = request.form.get('latitud')
         longitud = request.form.get('longitud')
-        
-        # Validar datos obligatorios
+
         if not descripcion:
             return jsonify({'error': 'La descripción es obligatoria'}), 400
-        
-        # Convertir coordenadas a float si están presentes
+
+        # Coordenadas (opcionales)
         try:
-            latitud = float(latitud) if latitud else None
-            longitud = float(longitud) if longitud else None
+            latitud = float(latitud) if latitud not in (None, '',) else None
+            longitud = float(longitud) if longitud not in (None, '',) else None
+            if latitud is not None and not (-90 <= latitud <= 90):
+                return jsonify({'error': 'Latitud fuera de rango'}), 400
+            if longitud is not None and not (-180 <= longitud <= 180):
+                return jsonify({'error': 'Longitud fuera de rango'}), 400
         except (ValueError, TypeError):
-            latitud = None
-            longitud = None
-        
-        # Crear el reporte
+            latitud, longitud = None, None
+
+        # Crear reporte
         nuevo_reporte = Reporte(
             descripcion=descripcion,
-            nombre_lugar=nombre_lugar if nombre_lugar else None,
+            nombre_lugar=nombre_lugar,
             latitud=latitud,
             longitud=longitud
         )
-        
         db.session.add(nuevo_reporte)
-        db.session.flush()  # Para obtener el ID del reporte
-        
-        # Procesar archivos de fotos
+        db.session.flush()  # obtener ID
+
+        # Subida de fotos (opcional)
         fotos_guardadas = []
         if 'fotos' in request.files:
-            fotos = request.files.getlist('fotos')
-            
-            # Crear directorio de uploads si no existe
-            upload_dir = os.path.join(current_app.static_folder, 'uploads', 'reportes')
-            os.makedirs(upload_dir, exist_ok=True)
-            
-            for foto in fotos:
-                if foto and foto.filename and allowed_file(foto.filename):
-                    # Generar nombre único para el archivo
-                    extension = foto.filename.rsplit('.', 1)[1].lower()
-                    nombre_unico = f"{uuid.uuid4().hex}.{extension}"
-                    nombre_seguro = secure_filename(nombre_unico)
-                    
-                    # Guardar archivo
-                    ruta_archivo = os.path.join(upload_dir, nombre_seguro)
-                    foto.save(ruta_archivo)
-                    
-                    # Crear registro en la base de datos
-                    foto_reporte = FotoReporte(
-                        reporte_id=nuevo_reporte.id,
-                        nombre_archivo=foto.filename,
-                        ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
-                    )
-                    
-                    db.session.add(foto_reporte)
-                    fotos_guardadas.append(foto_reporte.to_dict())
-        
+            upload_dir = ensure_upload_dir()
+            for foto in request.files.getlist('fotos'):
+                if not (foto and foto.filename):
+                    continue
+                if not allowed_file(foto.filename):
+                    continue
+
+                # Control de tamaño
+                pos = foto.tell()
+                contenido = foto.read()
+                if len(contenido) > MAX_FILE_SIZE:
+                    return jsonify({'error': 'El archivo es demasiado grande (máx 16MB)'}), 400
+                foto.seek(pos)  # reset
+
+                # Nombre único
+                ext = foto.filename.rsplit('.', 1)[1].lower()
+                nombre_unico = f"{uuid.uuid4().hex}.{ext}"
+                nombre_seguro = secure_filename(nombre_unico)
+
+                # Guardar archivo
+                ruta_fs = os.path.join(upload_dir, nombre_seguro)
+                foto.save(ruta_fs)
+
+                # Registrar en BD
+                registro = FotoReporte(
+                    reporte_id=nuevo_reporte.id,
+                    nombre_archivo=foto.filename,
+                    ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
+                )
+                db.session.add(registro)
+                fotos_guardadas.append(registro.to_dict())
+
         # Confirmar transacción
         db.session.commit()
-        
-        # Enviar reporte por email
+
+        # Enviar email (no bloqueante)
         try:
             email_service = EmailService()
-            
-            # Preparar datos del reporte para el email
-            reporte_email_data = {
+            data_email = {
                 'descripcion': descripcion,
                 'nombre_lugar': nombre_lugar,
                 'latitud': latitud,
                 'longitud': longitud,
                 'fecha_creacion': nuevo_reporte.fecha_creacion.isoformat()
             }
-            
-            # Preparar rutas de fotos para adjuntar
+
             rutas_fotos = []
             if fotos_guardadas:
-                upload_dir = os.path.join(current_app.static_folder, 'uploads', 'reportes')
-                for foto in fotos_guardadas:
-                    # Extraer nombre del archivo de la ruta
-                    nombre_archivo = foto['ruta_archivo'].split('/')[-1]
+                upload_dir = ensure_upload_dir()
+                for f in fotos_guardadas:
+                    nombre_archivo = f['ruta_archivo'].split('/')[-1]
                     ruta_completa = os.path.join(upload_dir, nombre_archivo)
                     if os.path.exists(ruta_completa):
                         rutas_fotos.append(ruta_completa)
-            
-            # Enviar email
-            email_enviado = email_service.enviar_reporte_ciudadano(reporte_email_data, rutas_fotos)
-            
-            if email_enviado:
-                current_app.logger.info(f"Email enviado exitosamente para reporte ID: {nuevo_reporte.id}")
-            else:
-                current_app.logger.warning(f"No se pudo enviar email para reporte ID: {nuevo_reporte.id}")
-                
-        except Exception as email_error:
-            # No fallar la creación del reporte si el email falla
-            current_app.logger.error(f"Error al enviar email para reporte ID {nuevo_reporte.id}: {str(email_error)}")
-        
-        # Preparar respuesta
-        reporte_dict = nuevo_reporte.to_dict()
-        reporte_dict['fotos'] = fotos_guardadas
-        
-        return jsonify({
-            'mensaje': 'Reporte creado exitosamente',
-            'reporte': reporte_dict
-        }), 201
-        
+
+            email_service.enviar_reporte_ciudadano(data_email, rutas_fotos)
+        except Exception as e_email:
+            current_app.logger.error(f"[Email] Error reporte {nuevo_reporte.id}: {e_email}")
+
+        # Respuesta
+        out = nuevo_reporte.to_dict()
+        out['fotos'] = fotos_guardadas
+        return jsonify({'mensaje': 'Reporte creado exitosamente', 'reporte': out}), 201
+
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"Error al crear reporte: {str(e)}")
+        current_app.logger.error(f"[POST /api/reportes] {e}")
         return jsonify({'error': 'Error interno del servidor'}), 500
+
 
 @reportes_bp.route('/reportes', methods=['GET'])
 def obtener_reportes():
     try:
-        # Obtener parámetros de paginación
         page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
-        
-        # Limitar per_page para evitar sobrecarga
-        per_page = min(per_page, 100)
-        
-        # Obtener reportes paginados
-        reportes_paginados = Reporte.query.order_by(Reporte.fecha_creacion.desc()).paginate(
-            page=page, 
-            per_page=per_page, 
-            error_out=False
+        per_page = min(request.args.get('per_page', 10, type=int), 100)
+
+        pag = Reporte.query.order_by(Reporte.fecha_creacion.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
         )
-        
-        reportes_lista = [reporte.to_dict() for reporte in reportes_paginados.items]
-        
+        items = [r.to_dict() for r in pag.items]
         return jsonify({
-            'reportes': reportes_lista,
-            'total': reportes_paginados.total,
-            'pages': reportes_paginados.pages,
+            'reportes': items,
+            'total': pag.total,
+            'pages': pag.pages,
             'current_page': page,
             'per_page': per_page
         }), 200
-        
+
     except Exception as e:
-        current_app.logger.error(f"Error al obtener reportes: {str(e)}")
+        current_app.logger.error(f"[GET /api/reportes] {e}")
         return jsonify({'error': 'Error interno del servidor'}), 500
+
 
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['GET'])
-def obtener_reporte(reporte_id):
+def obtener_reporte(reporte_id: int):
     try:
-        reporte = Reporte.query.get_or_404(reporte_id)
-        return jsonify({'reporte': reporte.to_dict()}), 200
-        
+        r = Reporte.query.get_or_404(reporte_id)
+        return jsonify({'reporte': r.to_dict()}), 200
     except Exception as e:
-        current_app.logger.error(f"Error al obtener reporte {reporte_id}: {str(e)}")
+        current_app.logger.error(f"[GET /api/reportes/{reporte_id}] {e}")
         return jsonify({'error': 'Error interno del servidor'}), 500
+
 
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['DELETE'])
-def eliminar_reporte(reporte_id):
+def eliminar_reporte(reporte_id: int):
     try:
-        reporte = Reporte.query.get_or_404(reporte_id)
-        
-        # Eliminar archivos de fotos del sistema de archivos
-        for foto in reporte.fotos:
-            ruta_completa = os.path.join(current_app.static_folder, foto.ruta_archivo.lstrip('/'))
-            if os.path.exists(ruta_completa):
-                os.remove(ruta_completa)
-        
-        # Eliminar reporte (las fotos se eliminan automáticamente por cascade)
-        db.session.delete(reporte)
+        r = Reporte.query.get_or_404(reporte_id)
+
+        # Borrar archivos físicos
+        upload_base = current_app.static_folder
+        for f in r.fotos:
+            ruta = os.path.join(upload_base, f.ruta_archivo.lstrip('/'))
+            try:
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+            except Exception as e_fs:
+                current_app.logger.warning(f"[FS] No se pudo eliminar {ruta}: {e_fs}")
+
+        db.session.delete(r)
         db.session.commit()
-        
         return jsonify({'mensaje': 'Reporte eliminado exitosamente'}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error al eliminar reporte {reporte_id}: {str(e)}")
-        return jsonify({'error': 'Error interno del servidor'}), 500
-
-
 
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"Error al crear reporte: {str(e)}")
+        current_app.logger.error(f"[DELETE /api/reportes/{reporte_id}] {e}")
         return jsonify({'error': 'Error interno del servidor'}), 500
