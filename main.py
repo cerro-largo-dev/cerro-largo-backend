@@ -25,7 +25,7 @@ CORS(app, supports_credentials=True, origins="*")
 # Registrar los blueprints de la API
 app.register_blueprint(user_bp, url_prefix='/api')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
-app.register_blueprint(reportes_bp)
+app.register_blueprint(reportes_bp, url_prefix='/api/reportes')
 
 # Configuración de la base de datos
 # El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
