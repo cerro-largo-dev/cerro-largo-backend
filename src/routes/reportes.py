@@ -5,7 +5,7 @@ from werkzeug.utils import secure_filename
 from src.models.reporte import db, Reporte, FotoReporte
 from src.utils.email_service import EmailService
 
-reportes_bp = Blueprint('reportes', __name__)
+reportes_bp = Blueprint('reportes', __name__, url_prefix='/api')
 
 # Configuración para subida de archivos
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
