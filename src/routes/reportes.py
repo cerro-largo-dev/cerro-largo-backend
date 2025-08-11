@@ -2,7 +2,7 @@ import os
 import uuid
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
-from src.models.reportes import db, Reporte, FotoReporte
+from src.models.reporte import db, Reporte, FotoReporte
 from src.utils.email_service import EmailService
 
 reportes_bp = Blueprint('reportes', __name__)
