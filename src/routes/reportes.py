@@ -1,5 +1,3 @@
-import os
-import uuid
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from src.models.reporte import db, Reporte, FotoReporte
