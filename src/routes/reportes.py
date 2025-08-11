@@ -45,10 +45,12 @@ def crear_reporte():
         )
         
         db.session.add(nuevo_reporte)
-        db.session.flush()  # Para obtener el ID del reporte
+        db.session.commit()  # Confirmar la transacción para que nuevo_reporte.id y fecha_creacion estén disponibles
         
         # Procesar archivos de fotos
         fotos_guardadas = []
+        fotos_rechazadas = []
+        
         if 'fotos' in request.files:
             fotos = request.files.getlist('fotos')
             
@@ -57,25 +59,61 @@ def crear_reporte():
             os.makedirs(upload_dir, exist_ok=True)
             
             for foto in fotos:
-                if foto and foto.filename and allowed_file(foto.filename):
-                    # Generar nombre único para el archivo
-                    extension = foto.filename.rsplit('.', 1)[1].lower()
-                    nombre_unico = f"{uuid.uuid4().hex}.{extension}"
-                    nombre_seguro = secure_filename(nombre_unico)
+                if foto and foto.filename:
+                    # Verificar tamaño del archivo
+                    foto.seek(0, 2)  # Ir al final del archivo
+                    file_size = foto.tell()
+                    foto.seek(0)  # Volver al inicio
                     
-                    # Guardar archivo
-                    ruta_archivo = os.path.join(upload_dir, nombre_seguro)
-                    foto.save(ruta_archivo)
+                    if file_size > MAX_FILE_SIZE:
+                        fotos_rechazadas.append({
+                            'nombre': foto.filename,
+                            'razon': f'Archivo demasiado grande ({file_size / (1024*1024):.1f}MB). Máximo permitido: {MAX_FILE_SIZE / (1024*1024)}MB'
+                        })
+                        continue
                     
-                    # Crear registro en la base de datos
-                    foto_reporte = FotoReporte(
-                        reporte_id=nuevo_reporte.id,
-                        nombre_archivo=foto.filename,
-                        ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
-                    )
+                    if not allowed_file(foto.filename):
+                        fotos_rechazadas.append({
+                            'nombre': foto.filename,
+                            'razon': f'Tipo de archivo no permitido. Tipos permitidos: {", ".join(ALLOWED_EXTENSIONS)}'
+                        })
+                        continue
                     
-                    db.session.add(foto_reporte)
-                    fotos_guardadas.append(foto_reporte.to_dict())
+                    try:
+                        # Generar nombre único para el archivo
+                        extension = foto.filename.rsplit('.', 1)[1].lower()
+                        nombre_unico = f"{uuid.uuid4().hex}.{extension}"
+                        nombre_seguro = secure_filename(nombre_unico)
+                        
+                        # Guardar archivo
+                        ruta_archivo = os.path.join(upload_dir, nombre_seguro)
+                        foto.save(ruta_archivo)
+                        
+                        # Verificar que el archivo se guardó correctamente
+                        if not os.path.exists(ruta_archivo):
+                            fotos_rechazadas.append({
+                                'nombre': foto.filename,
+                                'razon': 'Error al guardar el archivo en el servidor'
+                            })
+                            continue
+                        
+                        # Crear registro en la base de datos
+                        foto_reporte = FotoReporte(
+                            reporte_id=nuevo_reporte.id,
+                            nombre_archivo=foto.filename,
+                            ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
+                        )
+                        
+                        db.session.add(foto_reporte)
+                        fotos_guardadas.append(foto_reporte.to_dict())
+                        
+                    except Exception as foto_error:
+                        current_app.logger.error(f"Error al procesar foto {foto.filename}: {str(foto_error)}")
+                        fotos_rechazadas.append({
+                            'nombre': foto.filename,
+                            'razon': f'Error al procesar el archivo: {str(foto_error)}'
+                        })
+                        continue
         
         # Confirmar transacción
         db.session.commit()
@@ -90,7 +128,7 @@ def crear_reporte():
                 'nombre_lugar': nombre_lugar,
                 'latitud': latitud,
                 'longitud': longitud,
-                'fecha_creacion': nuevo_reporte.fecha_creacion.isoformat()
+                'fecha_creacion': nuevo_reporte.fecha_creacion.isoformat() if nuevo_reporte.fecha_creacion else None
             }
             
             # Preparar rutas de fotos para adjuntar
@@ -120,10 +158,17 @@ def crear_reporte():
         reporte_dict = nuevo_reporte.to_dict()
         reporte_dict['fotos'] = fotos_guardadas
         
-        return jsonify({
+        response_data = {
             'mensaje': 'Reporte creado exitosamente',
             'reporte': reporte_dict
-        }), 201
+        }
+        
+        # Incluir información sobre fotos rechazadas si las hay
+        if fotos_rechazadas:
+            response_data['fotos_rechazadas'] = fotos_rechazadas
+            response_data['mensaje'] += f' (Se rechazaron {len(fotos_rechazadas)} fotos)'
+        
+        return jsonify(response_data), 201
         
     except Exception as e:
         db.session.rollback()
