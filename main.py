@@ -12,7 +12,8 @@ from src.models import db
 from src.models.zone_state import ZoneState
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
-from src.routes.report import report_bp
+from src.routes.reportes import reportes_bp
+app.register_blueprint(reportes_bp)
 
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
 app = Flask(__name__, static_folder='static')
