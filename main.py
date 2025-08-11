@@ -13,7 +13,7 @@ from src.models.zone_state import ZoneState
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.reportes import reportes_bp
-app.register_blueprint(reportes_bp)
+
 
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
 app = Flask(__name__, static_folder='static')
@@ -25,7 +25,7 @@ CORS(app, supports_credentials=True, origins="*")
 # Registrar los blueprints de la API
 app.register_blueprint(user_bp, url_prefix='/api')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
-app.register_blueprint(report_bp, url_prefix='/api/report')
+app.register_blueprint(reportes_bp)
 
 # Configuración de la base de datos
 # El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
