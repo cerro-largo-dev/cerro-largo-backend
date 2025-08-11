@@ -15,16 +15,16 @@ from src.routes.admin import admin_bp
 from src.routes.reportes import reportes_bp
 
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
-app = Flask(__name__, static_folder=\'static\')
-app.config[\'SECRET_KEY\'] = \'cerro_largo_secret_key_2025\'
+app = Flask(__name__, static_folder='static')
+app.config['SECRET_KEY'] = 'cerro_largo_secret_key_2025'
 
 # Habilitar CORS para todas las rutas (permitir credenciales y cualquier origen).
 CORS(app, supports_credentials=True, origins="*")
 
 # Registrar los blueprints de la API
-app.register_blueprint(user_bp, url_prefix=\'/api\')
-app.register_blueprint(admin_bp, url_prefix=\'/api/admin\')
-app.register_blueprint(reportes_bp, url_prefix=\'/api/reportes\')
+app.register_blueprint(user_bp, url_prefix='/api')
+app.register_blueprint(admin_bp, url_prefix='/api/admin')
+app.register_blueprint(reportes_bp, url_prefix='/api')
 print("DEBUG: reportes_bp registrado correctamente")
 
 # Configuración de la base de datos
@@ -85,3 +85,4 @@ if __name__ == '__main__':
     # Ejecutar en modo debug salvo que FLASK_ENV indique producción
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
     app.run(host='0.0.0.0', port=port, debug=debug_mode)
+
