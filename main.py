@@ -12,9 +12,9 @@ from src.models import db
 from src.models.zone_state import ZoneState
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
-from src.routes.reportes import reportes_bp
+from src.routes.report import report_bp
 
-# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
+# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = 'cerro_largo_secret_key_2025'
 
@@ -24,8 +24,7 @@ CORS(app, supports_credentials=True, origins="*")
 # Registrar los blueprints de la API
 app.register_blueprint(user_bp, url_prefix='/api')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
-app.register_blueprint(reportes_bp, url_prefix='/api')
-print("DEBUG: reportes_bp registrado correctamente")
+app.register_blueprint(report_bp, url_prefix='/api/report')
 
 # Configuración de la base de datos
 # El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
@@ -81,8 +80,7 @@ def serve(path):
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
     # Ejecutar en modo debug salvo que FLASK_ENV indique producción
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
     app.run(host='0.0.0.0', port=port, debug=debug_mode)
-
