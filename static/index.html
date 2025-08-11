@@ -14,7 +14,7 @@
     <!-- Ventana de Reportes Ciudadanos -->
     <div id="reportes-panel" class="reportes-panel">
       <div class="reportes-header">
-        <h3>📋 Reportes Ciudadanos</h3>
+        <h3>Reportes Ciudadanos</h3>
         <button id="toggle-reportes" class="toggle-btn">−</button>
       </div>
       <div class="reportes-content">
@@ -260,7 +260,7 @@
     <script>
       class ReportesManager {
         constructor() {
-          this.apiUrl = '/api/reportes/reportes';
+          this.apiUrl = '/api/reportes/';
           this.reportes = [];
           this.isCollapsed = false;
           this.init();
