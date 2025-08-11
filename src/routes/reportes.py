@@ -215,7 +215,7 @@ def eliminar_reporte(reporte_id):
 
 # Agregar la función `to_dict` a los modelos si no la tienes ya definida
 
-class Reporte(db.Model):
+class Reportes(db.Model):
     # Tu código del modelo Reporte
     def to_dict(self):
         return {
