@@ -7,10 +7,6 @@ from src.utils.email_service import EmailService
 
 reportes_bp = Blueprint('reportes', __name__)
 
-# Configuración para subida de archivos
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
-
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
