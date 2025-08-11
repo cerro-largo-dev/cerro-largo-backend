@@ -2,6 +2,8 @@ from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from src.models.reporte import db, Reporte, FotoReporte
 from src.utils.email_service import EmailService
+import os
+import uuid
 
 reportes_bp = Blueprint('reportes', __name__)
 
