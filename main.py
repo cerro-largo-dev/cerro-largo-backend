@@ -20,14 +20,14 @@ from src.routes.reportes import reportes_bp
 
 # Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
 app = Flask(__name__, static_folder="../static")
-app.config[\'SECRET_KEY\'] = \'cerro_largo_secret_key_2025\'
+app.config["SECRET_KEY"] = "cerro_largo_secret_key_2025"
 
 # Habilitar CORS para todas las rutas (permitir credenciales y cualquier origen).
 CORS(app, supports_credentials=True, origins="*")
 
 # Registrar los blueprints de la API
-app.register_blueprint(user_bp, url_prefix=\'/api\')
-app.register_blueprint(admin_bp, url_prefix=\'/api/admin\')
+app.register_blueprint(user_bp, url_prefix=\"/api\")
+app.register_blueprint(admin_bp, url_prefix=\"/api/admin\")
 app.register_blueprint(report_bp, url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api/reportes")
 
@@ -35,8 +35,8 @@ app.register_blueprint(reportes_bp, url_prefix="/api/reportes")
 # El fichero app.db se encuentra en el directorio de nivel superior \'database\' (fuera de src),
 # por lo que calculamos la ruta subiendo un nivel desde __file__.
 base_dir = os.path.dirname(os.path.dirname(__file__))
-app.config[\'SQLALCHEMY_DATABASE_URI\'] = f"sqlite:///{os.path.join(base_dir, \'database\', \'app.db\')}"
-app.config[\'SQLALCHEMY_TRACK_MODIFICATIONS\'] = False
+app.config[\"SQLALCHEMY_DATABASE_URI\"] = f"sqlite:///{os.path.join(base_dir, \'database\', \'app.db\')}"
+app.config[\"SQLALCHEMY_TRACK_MODIFICATIONS\"] = False
 db.init_app(app)
 
 # Asegurarse de que el directorio de la base de datos exista
@@ -80,10 +80,11 @@ with app.app_context():
             print(f\'Usuario alcalde {username_alcalde} creado para {municipio}.\')
 
 # Ruta de salud para verificar que el servicio está activo
-@app.route(\'/api/health\')
+@app.route(\"/api/health\")
 def health_check():
     return jsonify({\'status\': \'healthy\', \'service\': \'cerro-largo-backend\'}), 200
 
 
 # Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
-@app.route(\'/\', defaults={\'path\': \'\'})
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
