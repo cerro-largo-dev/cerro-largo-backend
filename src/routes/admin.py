@@ -314,3 +314,4 @@ def create_user():
             'success': False,
             'message': f'Error al crear usuario: {str(e)}'
         }), 500
+
