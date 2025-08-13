@@ -1,84 +1,189 @@
-import os
-import sys
-# DON'T CHANGE THIS !!!
-# Ajustar el sys.path para que la importación de módulos desde la raíz del proyecto sea correcta.
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from flask import Blueprint, request, jsonify, session
+from src.models.zone_state import ZoneState, db
+from datetime import datetime
+import hashlib
 
-from flask import Flask, send_from_directory, jsonify
-from flask_cors import CORS
+admin_bp = Blueprint('admin', __name__)
 
-# Importar la instancia global de base de datos y el modelo ZoneState.
-from src.models import db
-from src.models.zone_state import ZoneState
-from src.routes.user import user_bp
-from src.routes.admin import admin_bp
-from src.routes.report import report_bp
+# Contraseña del administrador (en producción debería estar en variables de entorno)
+ADMIN_PASSWORD = "cerrolargo2025"
 
-# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
-app = Flask(__name__, static_folder="../static")
-app.config["SECRET_KEY"] = "cerro_largo_secret_key_2025"
-CORS(app, supports_credentials=True, origins="*")
+def hash_password(password):
+    """Hash de la contraseña para mayor seguridad"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
-# Registrar los blueprints de la API
-app.register_blueprint(user_bp, url_prefix='/api')
-app.register_blueprint(admin_bp, url_prefix='/api/admin')
-app.register_blueprint(report_bp, url_prefix='/api/report')
-
-# Configuración de la base de datos
-# El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
-# por lo que calculamos la ruta subiendo un nivel desde __file__.
-base_dir = os.path.dirname(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(base_dir, 'database', 'app.db')}"
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db.init_app(app)
-
-# Asegurarse de que el directorio de la base de datos exista
-os.makedirs(os.path.join(base_dir, 'database'), exist_ok=True)
-
-# Crear tablas y valores iniciales si es necesario
-with app.app_context():
-    db.create_all()
-
-    # Inicializar los estados predeterminados de los municipios si la tabla está vacía
-    # if ZoneState.query.count() == 0:
-    #     municipios_default = [
-    #         'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
-    #         'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
-    #         'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
-    #         'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
-    #     ]
-
-    #     for municipio in municipios_default:
-    #         ZoneState.update_zone_state(municipio, 'green', 'sistema')
-
-    #     print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
-
-# Ruta de salud para verificar que el servicio está activo
-@app.route('/api/health')
-def health_check():
-    return jsonify({'status': 'healthy', 'service': 'cerro-largo-backend'}), 200
-
-
-# Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    static_folder_path = app.static_folder
-    if static_folder_path is None:
-        return "Static folder not configured", 404
-
-    if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
-        return send_from_directory(static_folder_path, path)
-    else:
-        index_path = os.path.join(static_folder_path, 'index.html')
-        if os.path.exists(index_path):
-            return send_from_directory(static_folder_path, 'index.html')
+@admin_bp.route('/login', methods=['POST'])
+def admin_login():
+    """Autenticación del administrador"""
+    try:
+        data = request.get_json()
+        password = data.get('password', '')
+        
+        if password == ADMIN_PASSWORD:
+            session['admin_authenticated'] = True
+            return jsonify({
+                'success': True,
+                'message': 'Autenticación exitosa'
+            }), 200
         else:
-            return "index.html not found", 404
+            return jsonify({
+                'success': False,
+                'message': 'Contraseña incorrecta'
+            }), 401
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error en la autenticación: {str(e)}'
+        }), 500
 
+@admin_bp.route('/logout', methods=['POST'])
+def admin_logout():
+    """Cerrar sesión del administrador"""
+    session.pop('admin_authenticated', None)
+    return jsonify({
+        'success': True,
+        'message': 'Sesión cerrada'
+    }), 200
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    # Ejecutar en modo debug salvo que FLASK_ENV indique producción
-    debug_mode = os.environ.get('FLASK_ENV') != 'production'
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+@admin_bp.route('/check-auth', methods=['GET'])
+def check_auth():
+    """Verificar si el administrador está autenticado"""
+    is_authenticated = session.get('admin_authenticated', False)
+    return jsonify({
+        'authenticated': is_authenticated
+    }), 200
+
+def require_admin_auth(f):
+    """Decorador para requerir autenticación de administrador"""
+    def decorated_function(*args, **kwargs):
+        if not session.get('admin_authenticated', False):
+            return jsonify({
+                'success': False,
+                'message': 'Acceso no autorizado'
+            }), 401
+        return f(*args, **kwargs)
+    decorated_function.__name__ = f.__name__
+    return decorated_function
+
+@admin_bp.route('/zones/states', methods=['GET'])
+def get_zone_states():
+    """Obtener todos los estados de las zonas"""
+    try:
+        states = ZoneState.get_all_states()
+        return jsonify({
+            'success': True,
+            'states': states
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error al obtener estados: {str(e)}'
+        }), 500
+
+@admin_bp.route('/zones/update-state', methods=['POST'])
+@require_admin_auth
+def update_zone_state():
+    """Actualizar el estado de una zona"""
+    try:
+        data = request.get_json()
+        zone_name = data.get('zone_name')
+        state = data.get('state')
+        
+        if not zone_name or not state:
+            return jsonify({
+                'success': False,
+                'message': 'Nombre de zona y estado son requeridos'
+            }), 400
+        
+        if state not in ['green', 'yellow', 'red']:
+            return jsonify({
+                'success': False,
+                'message': 'Estado debe ser green, yellow o red'
+            }), 400
+        
+        updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
+        if updated_zone:
+            return jsonify({
+                'success': True,
+                'message': 'Estado actualizado correctamente',
+                'zone': updated_zone.to_dict()
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Error al actualizar o crear la zona'
+            }), 500
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error al actualizar estado: {str(e)}'
+        }), 500
+
+@admin_bp.route('/zones/bulk-update', methods=['POST'])
+@require_admin_auth
+def bulk_update_zones():
+    """Actualizar múltiples zonas a la vez"""
+    try:
+        data = request.get_json()
+        updates = data.get('updates', [])
+        
+        if not updates:
+            return jsonify({
+                'success': False,
+                'message': 'No se proporcionaron actualizaciones'
+            }), 400
+        
+        updated_zones = []
+        for update in updates:
+            zone_name = update.get('zone_name')
+            state = update.get('state')
+            
+            if zone_name and state and state in ['green', 'yellow', 'red']:
+                updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
+                if updated_zone:
+                    updated_zones.append(updated_zone.to_dict())
+        
+        return jsonify({
+            'success': True,
+            'message': f'Se actualizaron {len(updated_zones)} zonas',
+            'updated_zones': updated_zones
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error en actualización masiva: {str(e)}'
+        }), 500
+
+@admin_bp.route('/report/generate', methods=['GET'])
+@require_admin_auth
+def generate_report():
+    """Generar reporte de estados de zonas"""
+    try:
+        states = ZoneState.get_all_states()
+        
+        # Contar estados
+        state_counts = {'green': 0, 'yellow': 0, 'red': 0}
+        for zone_data in states.values():
+            state = zone_data.get('state', 'green')
+            state_counts[state] = state_counts.get(state, 0) + 1
+        
+        report_data = {
+            'generated_at': datetime.utcnow().isoformat(),
+            'total_zones': len(states),
+            'state_summary': state_counts,
+            'zones': states
+        }
+        
+        return jsonify({
+            'success': True,
+            'report': report_data
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error al generar reporte: {str(e)}'
+        }), 500
