@@ -1,24 +1,18 @@
-from . import db
-from datetime import datetime
+from flask_sqlalchemy import SQLAlchemy
+
+db = SQLAlchemy()
 
 class User(db.Model):
-    __tablename__ = 'users'
-
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
-    role = db.Column(db.String(20), nullable=False)  # 'admin' or 'alcalde'
-    municipality = db.Column(db.String(100), nullable=True) # For 'alcalde' role
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+
+    def __repr__(self):
+        return f'<User {self.username}>'
 
     def to_dict(self):
         return {
             'id': self.id,
             'username': self.username,
-            'role': self.role,
-            'municipality': self.municipality,
-            'created_at': self.created_at.isoformat()
+            'email': self.email
         }
-
-    def __repr__(self):
-        return f'<User {self.username} ({self.role})>'
