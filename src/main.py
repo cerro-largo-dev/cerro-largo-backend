@@ -2,10 +2,6 @@
 import os
 from flask import Flask, jsonify
 from flask_cors import CORS
-from dotenv import load_dotenv
-
-# ---- Cargar .env en desarrollo (inofensivo en prod) ----
-load_dotenv()
 
 # ---- IMPORTS de tu proyecto (ajusta si cambia la estructura) ----
 # Asumo la estructura que venías usando:
