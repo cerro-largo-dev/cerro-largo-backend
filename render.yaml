@@ -3,7 +3,7 @@ services:
     name: cerro-largo-backend
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python src/main.py
+    startCommand: python main.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -12,4 +12,3 @@ services:
       - key: PORT
         value: 10000
     healthCheckPath: /api/health
-
