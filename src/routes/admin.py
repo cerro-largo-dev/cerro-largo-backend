@@ -1,191 +1,84 @@
-from flask import Blueprint, request, jsonify, session
-from functools import wraps
-from models.zone_state import ZoneState, db
-from models.user import User
-from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+import os
+import sys
+# DON'T CHANGE THIS !!!
+# Ajustar el sys.path para que la importación de módulos desde la raíz del proyecto sea correcta.
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-admin_bp = Blueprint('admin', __name__)
+from flask import Flask, send_from_directory, jsonify
+from flask_cors import CORS
 
-# --------- Helpers ---------
-def require_role(required_role):
-    """Requiere sesión y rol específico."""
-    def decorator(f):
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            if not session.get('logged_in'):
-                return jsonify(success=False, message='No autenticado'), 401
+# Importar la instancia global de base de datos y el modelo ZoneState.
+from src.models import db
+from src.models.zone_state import ZoneState
+from src.routes.user import user_bp
+from src.routes.admin import admin_bp
+from src.routes.report import report_bp
 
-            role = session.get('role')
-            if required_role == 'admin' and role != 'admin':
-                return jsonify(success=False, message='Se requiere rol admin'), 403
-            if required_role == 'alcalde' and role != 'alcalde':
-                return jsonify(success=False, message='Se requiere rol alcalde'), 403
+# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
+app = Flask(__name__, static_folder="../static")
+app.config["SECRET_KEY"] = "cerro_largo_secret_key_2025"
+CORS(app, supports_credentials=True, origins="*")
 
-            return f(*args, **kwargs)
-        return decorated
-    return decorator
+# Registrar los blueprints de la API
+app.register_blueprint(user_bp, url_prefix='/api')
+app.register_blueprint(admin_bp, url_prefix='/api/admin')
+app.register_blueprint(report_bp, url_prefix='/api/report')
 
-def require_municipality_access(f):
-    """Admin accede a todo; alcalde solo a su municipio (según zone_name)."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get('logged_in'):
-            return jsonify(success=False, message='No autenticado'), 401
+# Configuración de la base de datos
+# El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
+# por lo que calculamos la ruta subiendo un nivel desde __file__.
+base_dir = os.path.dirname(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(base_dir, 'database', 'app.db')}"
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
 
-        role = session.get('role')
-        if role == 'admin':
-            return f(*args, **kwargs)
+# Asegurarse de que el directorio de la base de datos exista
+os.makedirs(os.path.join(base_dir, 'database'), exist_ok=True)
 
-        if role == 'alcalde':
-            data = request.get_json(silent=True) or {}
-            zone_name = data.get('zone_name')
-            user_municipality = session.get('municipality')
-            if zone_name and zone_name != user_municipality:
-                return jsonify(success=False,
-                               message=f'Acceso denegado: Solo puede modificar {user_municipality}'), 403
+# Crear tablas y valores iniciales si es necesario
+with app.app_context():
+    db.create_all()
 
-        return f(*args, **kwargs)
-    return decorated
+    # Inicializar los estados predeterminados de los municipios si la tabla está vacía
+    # if ZoneState.query.count() == 0:
+    #     municipios_default = [
+    #         'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
+    #         'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
+    #         'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
+    #         'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
+    #     ]
 
-# --------- Auth ---------
-@admin_bp.route('/login', methods=['POST'])
-def admin_login():
-    """Autenticación."""
-    try:
-        data = request.get_json(silent=True) or {}
-        username = (data.get('username') or '').strip()
-        password = (data.get('password') or '')
+    #     for municipio in municipios_default:
+    #         ZoneState.update_zone_state(municipio, 'green', 'sistema')
 
-        if not username or not password:
-            return jsonify(success=False, message='Faltan credenciales'), 400
+    #     print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
-        user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password_hash, password):
-            # (Opcional) limitar roles válidos
-            if user.role not in ('admin', 'alcalde'):
-                return jsonify(success=False, message='Rol no autorizado'), 403
+# Ruta de salud para verificar que el servicio está activo
+@app.route('/api/health')
+def health_check():
+    return jsonify({'status': 'healthy', 'service': 'cerro-largo-backend'}), 200
 
-            session.permanent = True  # si configuraste PERMANENT_SESSION_LIFETIME
-            session['logged_in'] = True
-            session['user_id'] = user.id
-            session['role'] = user.role
-            session['municipality'] = user.municipality
 
-            return jsonify(success=True,
-                           message='Autenticación exitosa',
-                           role=user.role,
-                           municipality=user.municipality), 200
+# Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    static_folder_path = app.static_folder
+    if static_folder_path is None:
+        return "Static folder not configured", 404
 
-        return jsonify(success=False, message='Usuario o contraseña incorrectos'), 401
+    if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
+        return send_from_directory(static_folder_path, path)
+    else:
+        index_path = os.path.join(static_folder_path, 'index.html')
+        if os.path.exists(index_path):
+            return send_from_directory(static_folder_path, 'index.html')
+        else:
+            return "index.html not found", 404
 
-    except Exception as e:
-        return jsonify(success=False, message=f'Error en la autenticación: {str(e)}'), 500
 
-@admin_bp.route('/logout', methods=['POST'])
-def admin_logout():
-    session.clear()
-    return jsonify(success=True, message='Sesión cerrada'), 200
-
-@admin_bp.route('/check-auth', methods=['GET'])
-def check_auth():
-    return jsonify(
-        authenticated=bool(session.get('logged_in')),
-        role=session.get('role'),
-        municipality=session.get('municipality')
-    ), 200
-
-# --------- Zonas ---------
-@admin_bp.route('/zones/states', methods=['GET'])
-@require_role('admin')
-def get_zone_states():
-    try:
-        states = ZoneState.get_all_states()  # debe retornar dict serializable
-        return jsonify(success=True, states=states), 200
-    except Exception as e:
-        return jsonify(success=False, message=f'Error al obtener estados: {str(e)}'), 500
-
-@admin_bp.route('/zones/update-state', methods=['POST'])
-@require_municipality_access
-def update_zone_state():
-    try:
-        data = request.get_json(silent=True) or {}
-        zone_name = data.get('zone_name')
-        state = data.get('state')
-
-        if not zone_name or not state:
-            return jsonify(success=False, message='zone_name y state son requeridos'), 400
-
-        if state not in {'green', 'yellow', 'red'}:
-            return jsonify(success=False, message='state debe ser green, yellow o red'), 400
-
-        updated_by = f"{session.get('role')}_{session.get('user_id')}"
-        updated_zone = ZoneState.update_zone_state(zone_name, state, updated_by)
-
-        if not updated_zone:
-            return jsonify(success=False, message='Error al actualizar o crear la zona'), 500
-
-        return jsonify(success=True,
-                       message='Estado actualizado correctamente',
-                       zone=updated_zone.to_dict()), 200
-    except Exception as e:
-        return jsonify(success=False, message=f'Error al actualizar estado: {str(e)}'), 500
-
-@admin_bp.route('/zones/bulk-update', methods=['POST'])
-@require_role('admin')
-def bulk_update_zones():
-    try:
-        data = request.get_json(silent=True) or {}
-        updates = data.get('updates') or []
-        if not updates:
-            return jsonify(success=False, message='No se proporcionaron actualizaciones'), 400
-
-        updated = []
-        updated_by = f"admin_{session.get('user_id')}"
-        for u in updates:
-            zone_name = u.get('zone_name')
-            state = u.get('state')
-            if not zone_name or state not in {'green', 'yellow', 'red'}:
-                continue
-            z = ZoneState.update_zone_state(zone_name, state, updated_by)
-            if z:
-                updated.append(z.to_dict())
-
-        return jsonify(success=True,
-                       message=f'Se actualizaron {len(updated)} zonas',
-                       updated_zones=updated), 200
-    except Exception as e:
-        return jsonify(success=False, message=f'Error en actualización masiva: {str(e)}'), 500
-
-# --------- Usuarios ---------
-@admin_bp.route('/create-user', methods=['POST'])
-@require_role('admin')
-def create_user():
-    try:
-        data = request.get_json(silent=True) or {}
-        username = (data.get('username') or '').strip()
-        password = (data.get('password') or '')
-        role = (data.get('role') or '').strip()
-        municipality = (data.get('municipality') or None)
-
-        if not username or not password or role not in {'admin', 'alcalde'}:
-            return jsonify(success=False,
-                           message='username, password y role (admin|alcalde) son requeridos'), 400
-
-        if role == 'alcalde' and not municipality:
-            return jsonify(success=False, message='municipality es requerido para alcalde'), 400
-
-        if User.query.filter_by(username=username).first():
-            return jsonify(success=False, message='El usuario ya existe'), 400
-
-        hashed = generate_password_hash(password, method='pbkdf2:sha256')
-        new_user = User(username=username,
-                        password_hash=hashed,
-                        role=role,
-                        municipality=municipality if role == 'alcalde' else None)
-        db.session.add(new_user)
-        db.session.commit()
-
-        return jsonify(success=True, message='Usuario creado exitosamente', user=new_user.to_dict()), 201
-    except Exception as e:
-        return jsonify(success=False, message=f'Error al crear usuario: {str(e)}'), 500
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    # Ejecutar en modo debug salvo que FLASK_ENV indique producción
+    debug_mode = os.environ.get('FLASK_ENV') != 'production'
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
