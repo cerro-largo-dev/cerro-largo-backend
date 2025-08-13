@@ -1,79 +1,95 @@
+# app.py
 import os
-import sys
-# DON\'T CHANGE THIS !!!
-# Ajustar el sys.path para que la importación de módulos desde la raíz del proyecto sea correcta.
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv
 
-# Importar la instancia global de base de datos y el modelo ZoneState.
+# ---- Cargar .env en desarrollo (inofensivo en prod) ----
+load_dotenv()
+
+# ---- IMPORTS de tu proyecto (ajusta si cambia la estructura) ----
+# Asumo la estructura que venías usando:
+# src/models/__init__.py define 'db'
+# src/routes/user.py define user_bp, etc.
 from src.models import db
-from src.models.zone_state import ZoneState
-from src.models.user import User
-from werkzeug.security import generate_password_hash
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
+from src.models.user import User  # Ajusta si el modelo admin está en otro módulo
+
+from werkzeug.security import generate_password_hash
 
 
-# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
-app = Flask(__name__, static_folder="../static")
-app.config[\'SECRET_KEY\'] = \'cerro_largo_secret_key_2025\'
+def create_app():
+    app = Flask(
+        __name__,
+        static_folder=None,  # API pura; el frontend vive en Render (otro servicio)
+    )
 
-# Habilitar CORS para todas las rutas (permitir credenciales y cualquier origen).
-CORS(app, supports_credentials=True, origins=\"*\")
+    # ---------- Configuración por variables de entorno ----------
+    # Clave secreta
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", os.urandom(24))
 
-# Registrar los blueprints de la API
-app.register_blueprint(user_bp, url_prefix=\'/api\')
-app.register_blueprint(admin_bp, url_prefix=\'/api/admin\')
-app.register_blueprint(report_bp, url_prefix=\"/api/report\")
-app.register_blueprint(reportes_bp, url_prefix=\"/api\")
+    # Base de datos
+    # Ejemplos:
+    #  - SQLite local: sqlite:///../database/app.db
+    #  - Postgres Render: postgresql+psycopg2://user:pass@host:port/dbname
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///../database/app.db"
+    )
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Configuración de la base de datos
-# El fichero app.db se encuentra en el directorio de nivel superior \'database\' (fuera de src),
-# por lo que calculamos la ruta subiendo un nivel desde __file__.
-base_dir = os.path.dirname(os.path.dirname(__file__))
-app.config[\'SQLALCHEMY_DATABASE_URI\'] = f\"sqlite:///{os.path.join(base_dir, \'database\', \'app.db\')}\"
-app.config[\'SQLALCHEMY_TRACK_MODIFICATIONS\'] = False
-db.init_app(app)
+    # ---------- CORS (frontend en Render + localhost dev) ----------
+    FRONTEND_ORIGINS = [
+        "https://cerro-largo-frontend.onrender.com",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
+    CORS(app, supports_credentials=True, origins=FRONTEND_ORIGINS)
 
-# Asegurarse de que el directorio de la base de datos exista
-os.makedirs(os.path.join(base_dir, \'database\'), exist_ok=True)
+    # ---------- Inicializar DB ----------
+    db.init_app(app)
 
-# Crear tablas y valores iniciales si es necesario
-with app.app_context():
-    db.create_all()
+    with app.app_context():
+        # Crear tablas si no existen (útil en desarrollo)
+        try:
+            db.create_all()
+        except Exception as e:
+            app.logger.error(f"DB create_all error: {e}")
 
-    # Crear un usuario administrador por defecto si no existe
-    if User.query.filter_by(username=\'admin\').first() is None:
-        hashed_password = generate_password_hash(\'cerrolargo2025\', method=\'pbkdf2:sha256\')
-        admin_user = User(username=\'admin\', password_hash=hashed_password, role=\'admin\', municipality=None)
-        db.session.add(admin_user)
-        db.session.commit()
-        print(\'Usuario administrador por defecto creado.\')
+        # Semilla de usuario admin SI y solo SI hay contraseña en entorno
+        admin_pass = os.getenv("ADMIN_PASSWORD")
+        if admin_pass:
+            admin = User.query.filter_by(username="admin").first()
+            if not admin:
+                hashed = generate_password_hash(admin_pass, method="pbkdf2:sha256")
+                admin = User(username="admin", password_hash=hashed, role="admin")
+                db.session.add(admin)
+                db.session.commit()
+                app.logger.info("Usuario admin creado por variables de entorno.")
+            else:
+                app.logger.info("Usuario admin ya existe; no se crea nuevamente.")
 
-    # Inicializar los estados predeterminados de los municipios si la tabla está vacía
-    if ZoneState.query.count() == 0:
-        municipios_default = [
-            \'ACEGUÁ\', \'ARBOLITO\', \'BAÑADO DE MEDINA\', \'CERRO DE LAS CUENTAS\',
-            \'FRAILE MUERTO\', \'ISIDORO NOBLÍA\', \'LAGO MERÍN\', \'LAS CAÑAS\',
-            \'MELO\', \'PLÁCIDO ROSAS\', \'RÍO BRANCO\', \'TOLEDO\', \'TUPAMBAÉ\',
-            \'ARÉVALO\', \'NOBLÍA\', \'Melo (GBB)\' , \'Melo (GCB)\'
-        ]
+    # ---------- Blueprints ----------
+    app.register_blueprint(user_bp, url_prefix="/api")
+    app.register_blueprint(admin_bp, url_prefix="/api/admin")
+    app.register_blueprint(report_bp, url_prefix="/api/report")
+    app.register_blueprint(reportes_bp, url_prefix="/api")  # si tienes endpoints /api/reportes/*, ideal prefijar "/api/reportes"
 
-        for municipio in municipios_default:
-            ZoneState.update_zone_state(municipio, \'green\', \'sistema\')
+    # ---------- Rutas básicas ----------
+    @app.get("/api/health")
+    def health():
+        return jsonify(ok=True, service="backend", env=os.getenv("FLASK_ENV", "unknown"))
 
-        print(f\'Inicializados {len(municipios_default)} municipios con estado green\')
-
-# Ruta de salud para verificar que el servicio está activo
-@app.route(\'/api/health\')
-def health_check():
-    return jsonify({\'status\': \'healthy\', \'service\': \'cerro-largo-backend\'}), 200
+    return app
 
 
-# Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
-@app.route(\'/\', defaults={\'path\': \'\'})
+app = create_app()
 
+if __name__ == "__main__":
+    # En producción usa gunicorn/uvicorn; esto es solo para desarrollo local.
+    port = int(os.getenv("PORT", "5000"))
+    debug_mode = os.getenv("FLASK_ENV") != "production"
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)
