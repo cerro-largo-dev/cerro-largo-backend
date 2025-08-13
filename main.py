@@ -10,13 +10,15 @@ from flask_cors import CORS
 # Importar la instancia global de base de datos y el modelo ZoneState.
 from src.models import db
 from src.models.zone_state import ZoneState
+from src.models.user import User
+from werkzeug.security import generate_password_hash
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
 
 
-# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
+# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = 'cerro_largo_secret_key_2025'
 
@@ -44,6 +46,14 @@ os.makedirs(os.path.join(base_dir, 'database'), exist_ok=True)
 with app.app_context():
     db.create_all()
 
+    # Crear un usuario administrador por defecto si no existe
+    if User.query.filter_by(username='admin').first() is None:
+        hashed_password = generate_password_hash('cerrolargo2025', method='pbkdf2:sha256')
+        admin_user = User(username='admin', password_hash=hashed_password, role='admin', municipality=None)
+        db.session.add(admin_user)
+        db.session.commit()
+        print('Usuario administrador por defecto creado.')
+
     # Inicializar los estados predeterminados de los municipios si la tabla está vacía
     if ZoneState.query.count() == 0:
         municipios_default = [
@@ -56,7 +66,7 @@ with app.app_context():
         for municipio in municipios_default:
             ZoneState.update_zone_state(municipio, 'green', 'sistema')
 
-        print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
+        print(f'Inicializados {len(municipios_default)} municipios con estado green')
 
 # Ruta de salud para verificar que el servicio está activo
 @app.route('/api/health')
