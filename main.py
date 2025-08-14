@@ -10,14 +10,13 @@ from flask_cors import CORS
 # Importar la instancia global de base de datos y el modelo ZoneState.
 from src.models import db
 from src.models.zone_state import ZoneState
-from src.models.user import User, ph # Importar User y ph
 from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
 
 
-# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
+# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = 'cerro_largo_secret_key_2025'
 
@@ -28,7 +27,7 @@ CORS(app, supports_credentials=True, origins="*")
 app.register_blueprint(user_bp, url_prefix='/api')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(report_bp, url_prefix='/api/report')
-app.register_blueprint(reportes_bp, url_prefix='/api')
+app.register_blueprint(reportes_bp, url_prefix="/api")
 
 # Configuración de la base de datos
 # El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
@@ -36,9 +35,28 @@ app.register_blueprint(reportes_bp, url_prefix='/api')
 base_dir = os.path.dirname(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(base_dir, 'database', 'app.db')}"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
 
 # Asegurarse de que el directorio de la base de datos exista
 os.makedirs(os.path.join(base_dir, 'database'), exist_ok=True)
+
+# Crear tablas y valores iniciales si es necesario
+with app.app_context():
+    db.create_all()
+
+    # Inicializar los estados predeterminados de los municipios si la tabla está vacía
+    if ZoneState.query.count() == 0:
+        municipios_default = [
+            'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
+            'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
+            'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
+            'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
+        ]
+
+        for municipio in municipios_default:
+            ZoneState.update_zone_state(municipio, 'green', 'sistema')
+
+        print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
 # Ruta de salud para verificar que el servicio está activo
 @app.route('/api/health')
@@ -47,7 +65,7 @@ def health_check():
 
 
 # Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
-@app.route('/', defaults={'path': ''}) 
+@app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
     static_folder_path = app.static_folder
@@ -65,39 +83,6 @@ def serve(path):
 
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.init_app(app)
-        db.create_all()
-
-        # Inicializar los estados predeterminados de los municipios si la tabla está vacía
-        if ZoneState.query.count() == 0:
-            municipios_default = [
-                'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
-                'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGO MERÍN', 'LAS CAÑAS',
-                'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
-                'ARÉVALO', 'NOBLÍA', 'Melo (GBB)' , 'Melo (GCB)'
-            ]
-
-            for municipio in municipios_default:
-                ZoneState.update_zone_state(municipio, 'green', 'sistema')
-
-            print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
-
-        # Crear usuario ADMIN inicial si no existe
-        if not User.query.filter_by(email='admin@cerrolargo.gub.uy').first():
-            admin_user = User(
-                email='admin@cerrolargo.gub.uy',
-                nombre='Administrador Principal',
-                role='ADMIN',
-                municipio_id=None,
-                force_password_reset=False,
-                is_active=True
-            )
-            admin_user.set_password('admin2025') # Contraseña inicial para el admin
-            db.session.add(admin_user)
-            db.session.commit()
-            print('Usuario ADMIN inicial creado.')
-
     port = int(os.environ.get('PORT',5000))
     # Ejecutar en modo debug salvo que FLASK_ENV indique producción
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
