@@ -14,12 +14,24 @@ from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
 
-# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front‑end.
+# Crear la aplicación Flask y configurar la carpeta estática donde se servirán los archivos del front-end.
 app = Flask(__name__, static_folder="../static")
-app.config["SECRET_KEY"] = "cerro_largo_secret_key_2025"
-CORS(app, supports_credentials=True, origins="*")
 
-# Registrar los blueprints de la API
+# 🔐 Clave de sesión y flags para cookies cross-site (Safari/iOS exige esto)
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "cerro_largo_secret_key_2025")
+app.config["SESSION_COOKIE_SAMESITE"] = "None"   # <- importante para cross-site
+app.config["SESSION_COOKIE_SECURE"] = True       # <- requiere HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+
+# 🌐 CORS con credenciales SOLO para tu frontend (no "*")
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://cerro-largo-frontend.onrender.com")
+CORS(
+    app,
+    resources={r"/api/*": {"origins": [FRONTEND_ORIGIN]}},
+    supports_credentials=True,
+)
+
+# Registrar los blueprints de la API (igual que tenías)
 app.register_blueprint(user_bp, url_prefix="/api")
 app.register_blueprint(admin_bp, url_prefix="/api/admin")
 app.register_blueprint(report_bp, url_prefix="/api/report")
@@ -48,17 +60,14 @@ with app.app_context():
             'MELO', 'PLÁCIDO ROSAS', 'RÍO BRANCO', 'TOLEDO', 'TUPAMBAÉ',
             'ARÉVALO', 'NOBLÍA', 'Melo (GBB)', 'Melo (GCB)'
         ]
-
         for municipio in municipios_default:
             ZoneState.update_zone_state(municipio, 'green', 'sistema')
-
         print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
 # Ruta de salud para verificar que el servicio está activo
 @app.route("/api/health")
 def health_check():
     return jsonify({'status': 'healthy', 'service': 'cerro-largo-backend'}), 200
-
 
 # Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
 @app.route("/", defaults={'path': ''})
@@ -82,7 +91,6 @@ def serve(path):
 @app.errorhandler(Exception)
 def handle_exception(e):
     return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
