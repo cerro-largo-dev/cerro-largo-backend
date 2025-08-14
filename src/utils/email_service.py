@@ -98,7 +98,7 @@ class EmailService:
         </head>
         <body>
             <div class="header">
-                <h1>🏛️ Nuevo Reporte Ciudadano</h1>
+                <h1>Nuevo Reporte Ciudadano</h1>
                 <p>Sistema de Reportes - Cerro Largo</p>
             </div>
             
@@ -121,7 +121,7 @@ class EmailService:
                 </div>
                 
                 <div class="info-box">
-                    <h3>⚡ Acciones Recomendadas</h3>
+                    <h3> Acciones Recomendadas</h3>
                     <ul>
                         <li>Revisar la descripción del problema reportado</li>
                         <li>Verificar la ubicación en el mapa</li>
