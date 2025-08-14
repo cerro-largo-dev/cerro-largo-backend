@@ -131,20 +131,17 @@ def crear_reporte():
                 'fecha_creacion': nuevo_reporte.fecha_creacion.isoformat() if nuevo_reporte.fecha_creacion else None
             }
             
-            # Preparar rutas de fotos para adjuntar (mapeo WEB -> filesystem)
+            # Preparar rutas de fotos para adjuntar
             rutas_fotos = []
             if fotos_guardadas:
                 upload_dir = os.path.join(current_app.static_folder, 'uploads', 'reportes')
                 for foto in fotos_guardadas:
-                    # Extraer nombre del archivo de la ruta web guardada en BD
+                    # Extraer nombre del archivo de la ruta
                     nombre_archivo = foto['ruta_archivo'].split('/')[-1]
                     ruta_completa = os.path.join(upload_dir, nombre_archivo)
                     if os.path.exists(ruta_completa):
                         rutas_fotos.append(ruta_completa)
-
-            # 👇 ÚNICO agregado: loguear qué adjuntos se enviarán
-            current_app.logger.info(f"Adjuntos a enviar: {rutas_fotos}")
-
+            
             # Enviar email
             email_enviado = email_service.enviar_reporte_ciudadano(reporte_email_data, rutas_fotos)
             
@@ -239,4 +236,11 @@ def eliminar_reporte(reporte_id):
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error al eliminar reporte {reporte_id}: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error al crear reporte: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
