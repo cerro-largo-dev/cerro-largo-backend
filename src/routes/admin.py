@@ -1,46 +1,26 @@
 from flask import Blueprint, request, jsonify, session
 from src.models.zone_state import ZoneState, db
-from werkzeug.security import check_password_hash
+from datetime import datetime
 import hashlib
 
 admin_bp = Blueprint('admin', __name__)
 
-# Credenciales de administrador simples (en producción usar base de datos)
-ADMIN_CREDENTIALS = {
-    'admin': hashlib.sha256('admin123'.encode()).hexdigest()
-}
+# Contraseña del administrador (en producción debería estar en variables de entorno)
+ADMIN_PASSWORD = "cerrolargo2025"
 
-def require_admin_auth(f):
-    """Decorador para requerir autenticación de administrador"""
-    def decorated_function(*args, **kwargs):
-        if not session.get('admin_authenticated', False):
-            return jsonify({
-                'success': False,
-                'message': 'Acceso no autorizado. Debe autenticarse como administrador.'
-            }), 401
-        return f(*args, **kwargs)
-    decorated_function.__name__ = f.__name__
-    return decorated_function
+def hash_password(password):
+    """Hash de la contraseña para mayor seguridad"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 @admin_bp.route('/login', methods=['POST'])
 def admin_login():
-    """Autenticación de administrador"""
+    """Autenticación del administrador"""
     try:
         data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
+        password = data.get('password', '')
         
-        if not username or not password:
-            return jsonify({
-                'success': False,
-                'message': 'Usuario y contraseña son requeridos'
-            }), 400
-        
-        # Verificar credenciales
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        if username in ADMIN_CREDENTIALS and ADMIN_CREDENTIALS[username] == password_hash:
+        if password == ADMIN_PASSWORD:
             session['admin_authenticated'] = True
-            session['admin_username'] = username
             return jsonify({
                 'success': True,
                 'message': 'Autenticación exitosa'
@@ -48,117 +28,162 @@ def admin_login():
         else:
             return jsonify({
                 'success': False,
-                'message': 'Credenciales incorrectas'
+                'message': 'Contraseña incorrecta'
             }), 401
             
     except Exception as e:
         return jsonify({
             'success': False,
-            'message': f'Error en autenticación: {str(e)}'
+            'message': f'Error en la autenticación: {str(e)}'
         }), 500
 
 @admin_bp.route('/logout', methods=['POST'])
 def admin_logout():
-    """Cerrar sesión de administrador"""
+    """Cerrar sesión del administrador"""
     session.pop('admin_authenticated', None)
-    session.pop('admin_username', None)
     return jsonify({
         'success': True,
-        'message': 'Sesión cerrada exitosamente'
+        'message': 'Sesión cerrada'
     }), 200
 
-@admin_bp.route('/zones', methods=['GET'])
-@require_admin_auth
-def get_zones_admin():
-    """Obtener todas las zonas (solo administrador)"""
-    try:
-        zones = ZoneState.query.all()
-        zones_data = [zone.to_dict() for zone in zones]
-        
-        return jsonify({
-            'success': True,
-            'zones': zones_data
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error al obtener zonas: {str(e)}'
-        }), 500
+@admin_bp.route('/check-auth', methods=['GET'])
+def check_auth():
+    """Verificar si el administrador está autenticado"""
+    is_authenticated = session.get('admin_authenticated', False)
+    return jsonify({
+        'authenticated': is_authenticated
+    }), 200
 
-@admin_bp.route('/zones/<zone_name>/state', methods=['PUT'])
-@require_admin_auth
-def update_zone_state(zone_name):
-    """Actualizar el estado de una zona (solo administrador)"""
-    try:
-        data = request.get_json()
-        new_state = data.get('state')
-        notes = data.get('notes', '')
-        
-        if not new_state or new_state not in ['green', 'yellow', 'red']:
+def require_admin_auth(f):
+    """Decorador para requerir autenticación de administrador"""
+    def decorated_function(*args, **kwargs):
+        if not session.get('admin_authenticated', False):
             return jsonify({
                 'success': False,
-                'message': 'Estado inválido. Debe ser green, yellow o red'
-            }), 400
-        
-        admin_username = session.get('admin_username', 'admin')
-        updated_zone = ZoneState.update_zone_state(zone_name, new_state, admin_username, notes)
-        
+                'message': 'Acceso no autorizado'
+            }), 401
+        return f(*args, **kwargs)
+    decorated_function.__name__ = f.__name__
+    return decorated_function
+
+@admin_bp.route('/zones/states', methods=['GET'])
+def get_zone_states():
+    """Obtener todos los estados de las zonas"""
+    try:
+        states = ZoneState.get_all_states()
         return jsonify({
             'success': True,
-            'message': f'Estado de {zone_name} actualizado a {new_state}',
-            'zone': updated_zone.to_dict()
+            'states': states
         }), 200
-        
     except Exception as e:
         return jsonify({
             'success': False,
-            'message': f'Error al actualizar zona: {str(e)}'
+            'message': f'Error al obtener estados: {str(e)}'
         }), 500
 
-@admin_bp.route('/zones', methods=['POST'])
+@admin_bp.route('/zones/update-state', methods=['POST'])
 @require_admin_auth
-def create_zone():
-    """Crear una nueva zona (solo administrador)"""
+def update_zone_state():
+    """Actualizar el estado de una zona"""
     try:
         data = request.get_json()
         zone_name = data.get('zone_name')
-        state = data.get('state', 'green')
-        notes = data.get('notes', '')
+        state = data.get('state')
         
-        if not zone_name:
+        if not zone_name or not state:
             return jsonify({
                 'success': False,
-                'message': 'Nombre de zona es requerido'
+                'message': 'Nombre de zona y estado son requeridos'
             }), 400
         
-        # Verificar si la zona ya existe
-        existing_zone = ZoneState.query.filter_by(zone_name=zone_name).first()
-        if existing_zone:
+        if state not in ['green', 'yellow', 'red']:
             return jsonify({
                 'success': False,
-                'message': 'La zona ya existe'
-            }), 409
+                'message': 'Estado debe ser green, yellow o red'
+            }), 400
         
-        admin_username = session.get('admin_username', 'admin')
-        new_zone = ZoneState.update_zone_state(zone_name, state, admin_username, notes)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Zona {zone_name} creada exitosamente',
-            'zone': new_zone.to_dict()
-        }), 201
+        updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
+        if updated_zone:
+            return jsonify({
+                'success': True,
+                'message': 'Estado actualizado correctamente',
+                'zone': updated_zone.to_dict()
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Error al actualizar o crear la zona'
+            }), 500
         
     except Exception as e:
         return jsonify({
             'success': False,
-            'message': f'Error al crear zona: {str(e)}'
+            'message': f'Error al actualizar estado: {str(e)}'
         }), 500
 
-@admin_bp.route('/status', methods=['GET'])
-def admin_status():
-    """Verificar estado de autenticación"""
-    return jsonify({
-        'authenticated': session.get('admin_authenticated', False),
-        'username': session.get('admin_username')
-    }), 200
+@admin_bp.route('/zones/bulk-update', methods=['POST'])
+@require_admin_auth
+def bulk_update_zones():
+    """Actualizar múltiples zonas a la vez"""
+    try:
+        data = request.get_json()
+        updates = data.get('updates', [])
+        
+        if not updates:
+            return jsonify({
+                'success': False,
+                'message': 'No se proporcionaron actualizaciones'
+            }), 400
+        
+        updated_zones = []
+        for update in updates:
+            zone_name = update.get('zone_name')
+            state = update.get('state')
+            
+            if zone_name and state and state in ['green', 'yellow', 'red']:
+                updated_zone = ZoneState.update_zone_state(zone_name, state, 'admin')
+                if updated_zone:
+                    updated_zones.append(updated_zone.to_dict())
+        
+        return jsonify({
+            'success': True,
+            'message': f'Se actualizaron {len(updated_zones)} zonas',
+            'updated_zones': updated_zones
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error en actualización masiva: {str(e)}'
+        }), 500
+
+@admin_bp.route('/report/generate', methods=['GET'])
+@require_admin_auth
+def generate_report():
+    """Generar reporte de estados de zonas"""
+    try:
+        states = ZoneState.get_all_states()
+        
+        # Contar estados
+        state_counts = {'green': 0, 'yellow': 0, 'red': 0}
+        for zone_data in states.values():
+            state = zone_data.get('state', 'green')
+            state_counts[state] = state_counts.get(state, 0) + 1
+        
+        report_data = {
+            'generated_at': datetime.utcnow().isoformat(),
+            'total_zones': len(states),
+            'state_summary': state_counts,
+            'zones': states
+        }
+        
+        return jsonify({
+            'success': True,
+            'report': report_data
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error al generar reporte: {str(e)}'
+        }), 500
