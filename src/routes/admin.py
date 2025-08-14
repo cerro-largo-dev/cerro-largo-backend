@@ -3,43 +3,61 @@ from src.models.zone_state import ZoneState, db
 from src.models.user import User, ph
 from datetime import datetime, timedelta
 from functools import wraps
+import logging
 import jwt
+
+logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint("admin", __name__)
 
-# Función para generar JWT
-def generate_token(user):
+# ---------------- JWT helpers ----------------
+
+def _extract_token():
+    """Obtiene el token desde Authorization. Acepta 'Bearer <token>' o el token directo."""
+    auth = request.headers.get("Authorization", "").strip()
+    if not auth:
+        return None
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return auth
+
+def _decode_jwt(token):
+    """Decodifica con pequeña tolerancia de reloj para evitar falsos expirados."""
+    return jwt.decode(
+        token,
+        current_app.config["SECRET_KEY"],
+        algorithms=["HS256"],
+        leeway=30,  # segundos
+    )
+
+def generate_token(user: User):
     payload = {
         "sub": user.id,
         "email": user.email,
         "role": user.role,
-        "municipio_id": user.municipio_id,  # Será None para ADMIN
-        "exp": datetime.utcnow() + timedelta(hours=12)  # Token expira en 12 horas
+        "municipio_id": user.municipio_id,  # None para ADMIN
+        "exp": datetime.utcnow() + timedelta(hours=12),
     }
     return jwt.encode(payload, current_app.config["SECRET_KEY"], algorithm="HS256")
 
-# Decorador para verificar JWT y roles
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = None
-        if "Authorization" in request.headers:
-            token = request.headers["Authorization"].split(" ")[1]
-
+        token = _extract_token()
         if not token:
             return jsonify({"message": "Token is missing!"}), 401
-
         try:
-            data = jwt.decode(token, current_app.config["SECRET_KEY"], algorithms=["HS256"])
-            current_user = User.query.get(data["sub"])
+            data = _decode_jwt(token)
+            current_user = User.query.get(data.get("sub"))
             if not current_user:
                 return jsonify({"message": "User not found!"}), 401
             request.current_user = current_user
         except jwt.ExpiredSignatureError:
+            logger.warning("JWT expired")
             return jsonify({"message": "Token has expired!"}), 401
-        except jwt.InvalidTokenError:
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"JWT invalid: {e}")
             return jsonify({"message": "Token is invalid!"}), 401
-
         return f(*args, **kwargs)
     return decorated
 
@@ -55,19 +73,20 @@ def require_roles(*roles):
     return wrapper
 
 def alcalde_scope(query, model_class):
+    """Restringe datos a su municipio si el usuario es ALCALDE."""
     user = request.current_user
     if user.role == "ALCALDE" and user.municipio_id:
-        # Asumiendo que el modelo tiene un campo 'zone_name' o similar que coincide con municipio_id
-        # Esto puede necesitar ser ajustado dependiendo del modelo específico
-        if hasattr(model_class, 'zone_name'):
+        if hasattr(model_class, "zone_name"):
             return query.filter(model_class.zone_name == user.municipio_id)
-        elif hasattr(model_class, 'municipio_id'): # Para el modelo User si se filtra por municipio
+        if hasattr(model_class, "municipio_id"):
             return query.filter(model_class.municipio_id == user.municipio_id)
     return query
 
+# ---------------- Rutas Auth ----------------
+
 @admin_bp.route("/login", methods=["POST"])
 def login():
-    data = request.get_json()
+    data = request.get_json() or {}
     email = data.get("email")
     password = data.get("password")
 
@@ -75,10 +94,8 @@ def login():
         return jsonify({"message": "Email and password are required"}), 400
 
     user = User.query.filter_by(email=email).first()
-
     if not user or not user.check_password(password):
         return jsonify({"message": "Invalid credentials"}), 401
-
     if not user.is_active:
         return jsonify({"message": "User account is inactive"}), 401
 
@@ -95,28 +112,30 @@ def check_auth():
         "municipio_id": user.municipio_id
     }), 200
 
+# ---------------- Zonas ----------------
+
 @admin_bp.route("/zones/states", methods=["GET"])
 @require_roles("ADMIN", "ALCALDE")
 def get_zone_states():
     try:
         query = ZoneState.query
-        query = alcalde_scope(query, ZoneState) # Aplicar scope para ALCALDE
+        query = alcalde_scope(query, ZoneState)
         states = {zone.zone_name: zone.to_dict() for zone in query.all()}
         return jsonify({"success": True, "states": states}), 200
     except Exception as e:
+        logger.exception("Error al obtener estados")
         return jsonify({"success": False, "message": f"Error al obtener estados: {str(e)}"}), 500
 
 @admin_bp.route("/zones/update-state", methods=["POST"])
 @require_roles("ADMIN", "ALCALDE")
 def update_zone_state():
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         zone_name = data.get("zone_name")
         state = data.get("state")
 
         if not zone_name or not state:
             return jsonify({"success": False, "message": "Nombre de zona y estado son requeridos"}), 400
-
         if state not in ["green", "yellow", "red"]:
             return jsonify({"success": False, "message": "Estado debe ser green, yellow o red"}), 400
 
@@ -127,19 +146,18 @@ def update_zone_state():
         updated_zone = ZoneState.update_zone_state(zone_name, state, user.email)
         if updated_zone:
             return jsonify({"success": True, "message": "Estado actualizado correctamente", "zone": updated_zone.to_dict()}), 200
-        else:
-            return jsonify({"success": False, "message": "Error al actualizar o crear la zona"}), 500
+        return jsonify({"success": False, "message": "Error al actualizar o crear la zona"}), 500
 
     except Exception as e:
+        logger.exception("Error al actualizar estado")
         return jsonify({"success": False, "message": f"Error al actualizar estado: {str(e)}"}), 500
 
 @admin_bp.route("/zones/bulk-update", methods=["POST"])
 @require_roles("ADMIN", "ALCALDE")
 def bulk_update_zones():
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         updates = data.get("updates", [])
-
         if not updates:
             return jsonify({"success": False, "message": "No se proporcionaron actualizaciones"}), 400
 
@@ -152,46 +170,22 @@ def bulk_update_zones():
             if user.role == "ALCALDE" and user.municipio_id != zone_name:
                 return jsonify({"success": False, "message": "Forbidden: Alcalde can only bulk update their assigned municipality"}), 403
 
-            if zone_name and state and state in ["green", "yellow", "red"]:
+            if zone_name and state in ["green", "yellow", "red"]:
                 updated_zone = ZoneState.update_zone_state(zone_name, state, user.email)
                 if updated_zone:
                     updated_zones.append(updated_zone.to_dict())
 
         return jsonify({"success": True, "message": f"Se actualizaron {len(updated_zones)} zonas", "updated_zones": updated_zones}), 200
-
     except Exception as e:
+        logger.exception("Error en bulk update")
         return jsonify({"success": False, "message": f"Error en actualización masiva: {str(e)}"}), 500
 
-@admin_bp.route("/report/generate", methods=["GET"])
-@require_roles("ADMIN", "ALCALDE")
-def generate_report():
-    try:
-        query = ZoneState.query
-        query = alcalde_scope(query, ZoneState) # Aplicar scope para ALCALDE
-        states = {zone.zone_name: zone.to_dict() for zone in query.all()}
-
-        # Contar estados
-        state_counts = {"green": 0, "yellow": 0, "red": 0}
-        for zone_data in states.values():
-            state = zone_data.get("state", "green")
-            state_counts[state] = state_counts.get(state, 0) + 1
-
-        report_data = {
-            "generated_at": datetime.utcnow().isoformat(),
-            "total_zones": len(states),
-            "state_summary": state_counts,
-            "zones": states
-        }
-
-        return jsonify({"success": True, "report": report_data}), 200
-
-    except Exception as e:
-        return jsonify({"success": False, "message": f"Error al generar reporte: {str(e)}"}), 500
+# ---------------- Usuarios ----------------
 
 @admin_bp.route("/users/alcalde", methods=["POST"])
 @require_roles("ADMIN")
 def create_alcalde_user():
-    data = request.get_json()
+    data = request.get_json() or {}
     email = data.get("email")
     nombre = data.get("nombre")
     municipio_id = data.get("municipio_id")
@@ -203,7 +197,6 @@ def create_alcalde_user():
     if User.query.filter_by(email=email).first():
         return jsonify({"message": "User with this email already exists"}), 409
 
-    # Verificar que el municipio_id existe en ZoneState
     if not ZoneState.query.filter_by(zone_name=municipio_id).first():
         return jsonify({"message": "Invalid municipio_id"}), 400
 
@@ -232,7 +225,7 @@ def get_all_users():
 @require_roles("ADMIN")
 def update_user(user_id):
     user = User.query.get_or_404(user_id)
-    data = request.get_json()
+    data = request.get_json() or {}
 
     user.email = data.get("email", user.email)
     user.nombre = data.get("nombre", user.nombre)
@@ -258,11 +251,13 @@ def delete_user(user_id):
     db.session.commit()
     return jsonify({"message": "User deleted successfully"}), 200
 
+# ---------------- Password ----------------
+
 @admin_bp.route("/password-reset", methods=["POST"])
 @token_required
 def password_reset():
     user = request.current_user
-    data = request.get_json()
+    data = request.get_json() or {}
     new_password = data.get("new_password")
 
     if not new_password:
@@ -273,5 +268,3 @@ def password_reset():
     db.session.commit()
 
     return jsonify({"message": "Password reset successfully"}), 200
-
-
