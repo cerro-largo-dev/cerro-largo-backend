@@ -19,15 +19,17 @@ app = Flask(__name__, static_folder="../static")
 
 # 🔐 Clave de sesión y flags para cookies cross-site (Safari/iOS exige esto)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "cerro_largo_secret_key_2025")
-app.config["SESSION_COOKIE_SAMESITE"] = "None"   # <- importante para cross-site
-app.config["SESSION_COOKIE_SECURE"] = True       # <- requiere HTTPS
+app.config["SESSION_COOKIE_SAMESITE"] = "None"   # ← importante para cross-site
+app.config["SESSION_COOKIE_SECURE"] = True       # ← requiere HTTPS
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 
-# 🌐 CORS con credenciales SOLO para tu frontend (no "*")
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://cerro-largo-frontend.onrender.com")
+# 🌐 CORS con credenciales SOLO para tu(s) frontend(s)
+# Puedes definir varios orígenes separados por coma en FRONTEND_ORIGIN
+origins_env = os.environ.get("FRONTEND_ORIGIN", "https://cerro-largo-frontend.onrender.com")
+origins = [o.strip() for o in origins_env.split(",") if o.strip()]
 CORS(
     app,
-    resources={r"/api/*": {"origins": [FRONTEND_ORIGIN]}},
+    resources={r"/api/*": {"origins": origins}},
     supports_credentials=True,
 )
 
@@ -37,22 +39,18 @@ app.register_blueprint(admin_bp, url_prefix="/api/admin")
 app.register_blueprint(report_bp, url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
 
-# Configuración de la base de datos
-# El fichero app.db se encuentra en el directorio de nivel superior 'database' (fuera de src),
-# por lo que calculamos la ruta subiendo un nivel desde __file__.
+# Configuración de la base de datos (SQLite en carpeta superior /database)
 base_dir = os.path.dirname(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(base_dir, 'database', 'app.db')}"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
-# Asegurarse de que el directorio de la base de datos exista
+# Asegurar directorio DB
 os.makedirs(os.path.join(base_dir, 'database'), exist_ok=True)
 
-# Crear tablas y valores iniciales si es necesario
+# Crear tablas e inicializar si está vacío
 with app.app_context():
     db.create_all()
-
-    # Inicializar los estados predeterminados de los municipios si la tabla está vacía
     if ZoneState.query.count() == 0:
         municipios_default = [
             'ACEGUÁ', 'ARBOLITO', 'BAÑADO DE MEDINA', 'CERRO DE LAS CUENTAS',
@@ -64,12 +62,12 @@ with app.app_context():
             ZoneState.update_zone_state(municipio, 'green', 'sistema')
         print(f"Inicializados {len(municipios_default)} municipios con estado 'green'")
 
-# Ruta de salud para verificar que el servicio está activo
+# Salud
 @app.route("/api/health")
 def health_check():
     return jsonify({'status': 'healthy', 'service': 'cerro-largo-backend'}), 200
 
-# Enrutamiento para servir archivos estáticos (React build) o index.html por defecto
+# Servir estáticos / index.html si procede
 @app.route("/", defaults={'path': ''})
 @app.route("/<path:path>")
 def serve(path):
@@ -87,13 +85,12 @@ def serve(path):
         else:
             return "index.html not found", 404
 
-# Manejo global de errores para capturar excepciones y devolver respuestas JSON consistentes
+# Manejo global de errores
 @app.errorhandler(Exception)
 def handle_exception(e):
     return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Ejecutar en modo debug salvo que FLASK_ENV indique producción
     debug_mode = os.environ.get("FLASK_ENV") != "production"
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
