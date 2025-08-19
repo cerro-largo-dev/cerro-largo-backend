@@ -58,7 +58,7 @@ CORS(
 # Blueprints
 # -----------------------------------------------------------------------------
 # Nota: mantenemos los prefijos que ya usás en prod
-app.register_blueprint(user_bp,     url_prefix="/api/user")
+app.register_blueprint(user_bp,     url_prefix="/api")
 app.register_blueprint(admin_bp,    url_prefix="/api/admin")
 app.register_blueprint(report_bp,   url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
