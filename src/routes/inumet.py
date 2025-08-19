@@ -13,14 +13,12 @@ INUMET_CAP_ALERTS = (
     "https://w2b.inumet.gub.uy/oapi/collections/"
     "urn%3Awmo%3Amd%3Auy-inumet%3Acap-alerts/items?f=json"
 )
-
 # Donde leer el polígono de Cerro Largo:
 # 1) URL pública (recomendado) -> mover el archivo a /public del frontend
-CERRO_GEOJSON_URL = os.environ.get(
-    "cerro_largo_municipios_2025.geojson",
-    # ejemplo de fallback local (si prefieres copiar el archivo en el backend):
-    # "file://./data/series_cerro_largo.geojson"
-    ""
+CERRO_GEOJSON_URL = "https://cerro-largo-frontend.onrender.com/cerro_largo_municipios_2025.geojson"
+
+# ejemplo de fallback local (si prefieres copiar el archivo en el backend):
+# CERRO_GEOJSON_URL = "file://./data/series_cerro_largo.geojson"
 )
 
 # Cache básico en memoria para no re-leer el polígono a cada request
