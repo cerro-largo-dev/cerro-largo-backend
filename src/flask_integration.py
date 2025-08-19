@@ -1,87 +1,96 @@
 #!/usr/bin/env python3
 """
 Integración Flask para la funcionalidad de generación de PDF
+(versión saneada para no servir HTML ni estáticos)
 """
 
-from flask import Flask, jsonify, send_file, request
-from flask_cors import CORS
 import os
 import tempfile
+from flask import Flask, jsonify, send_file, request
+from flask_cors import CORS
 from pdf_generator import ReporteEstadoMunicipios
 
-app = Flask(__name__)
+# Deshabilitar carpeta estática para evitar servir /static/*
+app = Flask(__name__, static_folder=None, static_url_path=None)
 CORS(app)  # Permitir CORS para todas las rutas
+
+# -------------------- Rutas API PDF --------------------
 
 @app.route('/api/generar-reporte', methods=['POST'])
 def generar_reporte():
     """
-    Endpoint para generar el PDF del reporte de municipios
-    
-    Espera un JSON con la estructura:
-    {
-        "municipios": [
-            {
-                "nombre": "Melo",
-                "estado": "Habilitado",
-                "color": "Verde",
-                "alerta": "Sin restricciones"
-            },
-            ...
-        ]
-    }
+    Genera PDF de reporte de municipios.
+    Espera JSON: {"municipios": [ ... ]}
     """
     try:
-        # Obtener datos del request
-        data = request.get_json()
-        municipios = data.get('municipios', None) if data else None
-        
-        # Crear generador de PDF
+        data = request.get_json(silent=True) or {}
+        municipios = data.get('municipios')
         generador = ReporteEstadoMunicipios()
-        
-        # Crear archivo temporal para el PDF
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             archivo_pdf = generador.generar_pdf(tmp_file.name, municipios)
-            
-            # Enviar el archivo PDF como respuesta
             return send_file(
                 archivo_pdf,
                 as_attachment=True,
                 download_name='reporte_municipios.pdf',
                 mimetype='application/pdf'
             )
-    
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
 
 @app.route('/api/generar-reporte-ejemplo', methods=['GET'])
 def generar_reporte_ejemplo():
-    """
-    Endpoint para generar un PDF de ejemplo con datos ficticios
-    """
+    """Genera un PDF de ejemplo con datos ficticios."""
     try:
-        # Crear generador de PDF
         generador = ReporteEstadoMunicipios()
-        
-        # Crear archivo temporal para el PDF
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             archivo_pdf = generador.generar_pdf(tmp_file.name)
-            
-            # Enviar el archivo PDF como respuesta
             return send_file(
                 archivo_pdf,
                 as_attachment=True,
                 download_name='reporte_ejemplo_municipios.pdf',
                 mimetype='application/pdf'
             )
-    
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Endpoint de verificación de salud del servicio"""
-    return jsonify({'status': 'ok', 'message': 'Servicio de generación de PDF funcionando'})
+    """Verificación de salud del servicio."""
+    return jsonify({'ok': True, 'service': 'pdf'}), 200
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+# -------------------- Endpoints no-HTML --------------------
 
+@app.route('/', methods=['GET'])
+def root():
+    # Nunca servir HTML aquí
+    return jsonify({'name': 'cerro-largo-backend', 'component': 'pdf', 'ok': True}), 200
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    # Si alguien pega a /api/... inexistente → JSON 404 (no HTML)
+    if path.startswith('api/'):
+        return jsonify({'ok': False, 'error': 'not found', 'path': f'/{path}'}), 404
+    # Para cualquier otra ruta fuera de /api → JSON simple
+    return jsonify({'message': 'Servicio PDF activo'}), 200
+
+# -------------------- Errores en JSON dentro de /api/* --------------------
+
+@app.errorhandler(404)
+def _not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'ok': False, 'error': 'not found', 'path': request.path}), 404
+    return e, 404  # fuera de /api, comportamiento por defecto (o cambia si querés)
+
+@app.errorhandler(405)
+def _method_not_allowed(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'ok': False, 'error': 'method not allowed', 'path': request.path}), 405
+    return e, 405
+
+# Nota: no incluimos app.run(...) para evitar un segundo servidor en producción.
+# Si querés probar local:
+#   FLASK_APP=flask_integration.py flask run --port 5001
