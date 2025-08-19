@@ -1,10 +1,9 @@
-# src/routes/inumet.py
 import os
 import time
 import json
 import requests
 from flask import Blueprint, jsonify
-from shapely.geometry import shape, Point, Polygon, MultiPolygon
+from shapely.geometry import shape, Polygon, MultiPolygon
 
 inumet_bp = Blueprint("inumet", __name__)
 
@@ -13,13 +12,13 @@ INUMET_CAP_ALERTS = (
     "https://w2b.inumet.gub.uy/oapi/collections/"
     "urn%3Awmo%3Amd%3Auy-inumet%3Acap-alerts/items?f=json"
 )
+
 # Donde leer el polígono de Cerro Largo:
 # 1) URL pública (recomendado) -> mover el archivo a /public del frontend
 CERRO_GEOJSON_URL = "https://cerro-largo-frontend.onrender.com/cerro_largo_municipios_2025.geojson"
 
 # ejemplo de fallback local (si prefieres copiar el archivo en el backend):
 # CERRO_GEOJSON_URL = "file://./data/series_cerro_largo.geojson"
-)
 
 # Cache básico en memoria para no re-leer el polígono a cada request
 _CERRO_POLY = None
@@ -36,23 +35,13 @@ def _load_cerro_polygon():
         return _CERRO_POLY
 
     src = CERRO_GEOJSON_URL.strip()
-    if not src:
-        # Si no se configuró URL, intentar leer un archivo local común
-        # Ajusta la ruta si lo copias en el backend (ej: ./data/series_cerro_largo.geojson)
-        local_path = os.path.join(os.path.dirname(__file__), "..", "static", "series_cerro_largo.geojson")
-        local_path = os.path.abspath(local_path)
-        if not os.path.exists(local_path):
-            raise RuntimeError("Falta CERRO_GEOJSON_URL o archivo local de Cerro Largo")
-        with open(local_path, "r", encoding="utf-8") as f:
+    if src.startswith("file://"):
+        with open(src.replace("file://", ""), "r", encoding="utf-8") as f:
             gj = json.load(f)
     else:
-        if src.startswith("file://"):
-            with open(src.replace("file://", ""), "r", encoding="utf-8") as f:
-                gj = json.load(f)
-        else:
-            r = requests.get(src, timeout=10)
-            r.raise_for_status()
-            gj = r.json()
+        r = requests.get(src, timeout=10)
+        r.raise_for_status()
+        gj = r.json()
 
     # Unir todas las geometrías del GeoJSON en un MultiPolygon único
     geoms = []
@@ -62,15 +51,12 @@ def _load_cerro_polygon():
         if not g:
             continue
         shp = shape(g)
-        # Filtrar por tipos poligonales
         if isinstance(shp, (Polygon, MultiPolygon)):
             geoms.append(shp)
 
     if not geoms:
         raise RuntimeError("El GeoJSON no contiene polígonos válidos")
 
-    # Unir todo en un multipolígono
-    # Nota: shapely.ops.unary_union no está importado; MultiPolygon con suma básica:
     from shapely.ops import unary_union
     cerro_union = unary_union(geoms)
 
@@ -80,9 +66,7 @@ def _load_cerro_polygon():
 
 
 def _level_from_props(props):
-    """
-    INUMET CAP: nivel numérico en 'value' (1/2/3) y texto en 'name' (ej: 'Advertencia Amarilla').
-    """
+    """INUMET CAP: nivel numérico en 'value' y texto en 'name'."""
     lv = props.get("value")
     if isinstance(lv, (int, float)):
         return int(round(lv))
@@ -98,7 +82,7 @@ def _level_from_props(props):
 
 @inumet_bp.route("/alerts/cerro-largo", methods=["GET"])
 def alerts_cerro_largo():
-    """Devuelve alertas INUMET que INTERSECTEN el polígono real de Cerro Largo."""
+    """Devuelve alertas INUMET que INTERSECTEN el polígono de Cerro Largo."""
     try:
         poly = _load_cerro_polygon()
 
@@ -113,7 +97,6 @@ def alerts_cerro_largo():
             if not geom:
                 continue
             alert_shape = shape(geom)
-            # Intersección poligonal real
             if not poly.intersects(alert_shape):
                 continue
 
@@ -123,14 +106,12 @@ def alerts_cerro_largo():
                 "id": props.get("reportId") or props.get("id"),
                 "name": props.get("name") or "Alerta INUMET",
                 "description": props.get("description") or "",
-                "level": level,  # 1=Amarilla, 2=Naranja, 3=Roja
+                "level": level,
                 "phenomenonTime": props.get("phenomenonTime"),
                 "reportTime": props.get("reportTime") or props.get("sent"),
             })
 
-        # Orden: más severa primero, y opcionalmente más reciente
         out.sort(key=lambda x: (x["level"] or 0, x["reportTime"] or ""), reverse=True)
-
         return jsonify({"ok": True, "count": len(out), "alerts": out}), 200
 
     except requests.RequestException as e:
