@@ -1,7 +1,7 @@
 import os
 import sys
 from datetime import datetime
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request, abort
 from flask_cors import CORS
 
 # --- Import paths (raíz del proyecto) ---
@@ -15,7 +15,7 @@ from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
 from src.routes.notify import notify_bp  # Suscripciones WhatsApp
-from src.routes.inumet import inumet_bp # Alertas de Inumet
+from src.routes.inumet import inumet_bp  # Alertas de Inumet
 
 # ---------------------------------------------------------------------------
 # Config básica
@@ -62,8 +62,7 @@ app.register_blueprint(admin_bp,    url_prefix="/api/admin")
 app.register_blueprint(report_bp,   url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
 app.register_blueprint(notify_bp,   url_prefix="/api/notify")
-app.register_blueprint(inumet_bp, url_prefix="/api/inumet")
-
+app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")
 
 # ---------------------------------------------------------------------------
 # Seed inicial de zonas
@@ -96,12 +95,26 @@ with app.app_context():
 def healthz():
     return jsonify({"ok": True}), 200
 
+@app.route("/__ping")
+def __ping():
+    return jsonify({"ok": True, "app": "backend"}), 200
+
 # ---------------------------------------------------------------------------
 # Manejo global de errores
 # ---------------------------------------------------------------------------
+@app.errorhandler(404)
+def _not_found(e):
+    # Nunca devolver HTML para rutas de API
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
+    return e, 404
+
 @app.errorhandler(Exception)
 def handle_exception(e):
-    return jsonify({"error": str(e)}), 500
+    # Errores en API → JSON; resto deja a Flask
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return e, 500
 
 # ---------------------------------------------------------------------------
 # Main
