@@ -98,7 +98,7 @@ def _level_from_props(props):
     return None
 
 
-@inumet_bp.route("/api/inumet/alerts/cerro-largo", methods=["GET"])
+@inumet_bp.route("/alerts/cerro-largo", methods=["GET"])
 def alerts_cerro_largo():
     """Devuelve alertas INUMET que INTERSECTEN el polígono real de Cerro Largo."""
     try:
