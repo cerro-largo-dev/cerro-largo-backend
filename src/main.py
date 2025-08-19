@@ -1,7 +1,8 @@
+# main.py
 import os
 import sys
 from datetime import datetime
-from flask import Flask, jsonify, request, abort
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 # --- Import paths (raíz del proyecto) ---
@@ -14,17 +15,16 @@ from src.routes.user import user_bp
 from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
-from src.routes.notify import notify_bp  # Suscripciones WhatsApp
-from src.routes.inumet import inumet_bp  # Alertas de Inumet
+from src.routes.notify import notify_bp      # Suscripciones WhatsApp
+from src.routes.inumet import inumet_bp      # Alertas de Inumet
 
 # ---------------------------------------------------------------------------
-# Config básica
+# Config
 # ---------------------------------------------------------------------------
 FRONTEND_ORIGIN = os.environ.get(
     "FRONTEND_ORIGIN",
     "https://cerro-largo-frontend.onrender.com"
 )
-
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret")
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -33,7 +33,7 @@ DB_PATH = os.path.join(BASE_DIR, "database", "app.db")
 # ---------------------------------------------------------------------------
 # App & CORS
 # ---------------------------------------------------------------------------
-app = Flask(__name__)
+app = Flask(__name__)  # (no cambio el static_folder)
 app.secret_key = SECRET_KEY
 app.config.update(
     SESSION_COOKIE_SAMESITE="None",
@@ -65,7 +65,7 @@ app.register_blueprint(notify_bp,   url_prefix="/api/notify")
 app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")
 
 # ---------------------------------------------------------------------------
-# Seed inicial de zonas
+# Seed inicial de zonas (sin cambios de lógica)
 # ---------------------------------------------------------------------------
 DESIRED_ZONE_ORDER = [
     "ACEGUÁ", "FRAILE MUERTO", "RÍO BRANCO", "TUPAMBAÉ", "LAS CAÑAS",
@@ -100,23 +100,43 @@ def __ping():
     return jsonify({"ok": True, "app": "backend"}), 200
 
 # ---------------------------------------------------------------------------
-# Manejo global de errores
+# Catch-all para SPA: NUNCA servir HTML para /api/*
+# ---------------------------------------------------------------------------
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_spa(path):
+    # Si la ruta apunta a API pero no existe, devolver JSON 404 (no HTML)
+    if path.startswith("api/"):
+        return jsonify({"ok": False, "error": "not found", "path": f"/{path}"}), 404
+
+    # Si tenés carpeta estática configurada y existe archivo, permitir servirlo
+    static_folder_path = app.static_folder and os.path.abspath(app.static_folder)
+    if static_folder_path and os.path.isdir(static_folder_path):
+        candidate = os.path.join(static_folder_path, path) if path else None
+        if path and candidate and os.path.exists(candidate) and os.path.isfile(candidate):
+            return send_from_directory(static_folder_path, path)
+        index_path = os.path.join(static_folder_path, "index.html")
+        if os.path.exists(index_path):
+            return send_from_directory(static_folder_path, "index.html")
+
+    # Respuesta por defecto si no hay estáticos
+    return jsonify({"message": "Backend activo"}), 200
+
+# ---------------------------------------------------------------------------
+# Manejo de errores: devolver JSON SOLO para /api/*
 # ---------------------------------------------------------------------------
 @app.errorhandler(404)
 def _not_found(e):
-    # Nunca devolver HTML para rutas de API
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
-    # Antes: return e, 404  -> devolvía HTML
-    return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
+    # fuera de /api mantiene el comportamiento (HTML) del catch-all/Flask
+    return e, 404
 
-@app.errorhandler(Exception)
-def handle_exception(e):
-    # Errores en API → JSON; resto deja a Flask
+@app.errorhandler(405)
+def _method_not_allowed(e):
     if request.path.startswith("/api/"):
-        return jsonify({"ok": False, "error": str(e)}), 500
-    # Antes: return e, 500  -> devolvía HTML
-    return jsonify({"ok": False, "error": "internal error"}), 500
+        return jsonify({"ok": False, "error": "method not allowed", "path": request.path}), 405
+    return e, 405
 
 # ---------------------------------------------------------------------------
 # Main
