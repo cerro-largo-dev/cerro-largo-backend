@@ -107,14 +107,16 @@ def _not_found(e):
     # Nunca devolver HTML para rutas de API
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
-    return e, 404
+    # Antes: return e, 404  -> devolvía HTML
+    return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     # Errores en API → JSON; resto deja a Flask
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": str(e)}), 500
-    return e, 500
+    # Antes: return e, 500  -> devolvía HTML
+    return jsonify({"ok": False, "error": "internal error"}), 500
 
 # ---------------------------------------------------------------------------
 # Main
