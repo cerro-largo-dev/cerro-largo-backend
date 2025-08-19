@@ -17,7 +17,7 @@ INUMET_CAP_ALERTS = (
 # Donde leer el polígono de Cerro Largo:
 # 1) URL pública (recomendado) -> mover el archivo a /public del frontend
 CERRO_GEOJSON_URL = os.environ.get(
-    "CERRO_GEOJSON_URL",
+    "cerro_largo_municipios_2025.geojson",
     # ejemplo de fallback local (si prefieres copiar el archivo en el backend):
     # "file://./data/series_cerro_largo.geojson"
     ""
