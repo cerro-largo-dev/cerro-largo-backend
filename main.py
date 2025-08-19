@@ -62,7 +62,7 @@ app.register_blueprint(admin_bp,    url_prefix="/api/admin")
 app.register_blueprint(report_bp,   url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
 app.register_blueprint(notify_bp,   url_prefix="/api/notify")
-app.register_blueprint(inumet_bp, url_prefix="//api/inumet")
+app.register_blueprint(inumet_bp, url_prefix="/api/inumet")
 
 
 # ---------------------------------------------------------------------------
