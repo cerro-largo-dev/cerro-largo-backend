@@ -15,7 +15,7 @@ INUMET_CAP_ALERTS = (
 # GeoJSON de Cerro Largo (ajusta si corresponde)
 CERRO_GEOJSON_URL = os.getenv(
     "CERRO_GEOJSON_URL",
-    "https://cerro-largo-frontend.onrender.com/cerro_largo_municipios_2025.geojson"
+    "https://cerro-largo-frontend.onrender.com/cerro_largo.geojson"
 )
 
 # Cache simple del polígono
