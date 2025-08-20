@@ -2,29 +2,22 @@
 # -*- coding: utf-8 -*-
 """
 INUMET alerts router (WIS2 / OGC API)
-- Trae alertas CAP desde cap-alerts/items (sólo campos del schema oficial)
-- Si viene vacío, consulta 'messages' por metadata_id (señal WIS2)
-- Filtra por intersección geométrica con Cerro Largo + fallback textual
-- ?include_geometry=1 para incluir Geometry válido (GeoJSON schema)
-- ?debug=1 devuelve métricas/diagnóstico
+- Lee cap-alerts/items con los campos del schema oficial
+- Si viene vacío, consulta 'messages' por metadata_id y genera una alerta sintética
+- Filtro textual por Cerro Largo (si la descripción/nombre lo mencionan)
+- ?debug=1 devuelve métricas
 
 Requisitos:
   - requests
-  - shapely
 """
 
 import os
 import time
 import json
-import zipfile
 import unicodedata
-import xml.etree.ElementTree as ET
 
 import requests
 from flask import Blueprint, jsonify, request
-
-from shapely.geometry import shape as shp_shape, Polygon, MultiPolygon, mapping
-from shapely.ops import unary_union, transform as shp_transform
 
 # -------------------- Blueprint --------------------
 inumet_bp = Blueprint("inumet", __name__)
@@ -42,169 +35,7 @@ COMMON_PROPS = (
     "description,name,phenomenonTime,reportId,reportTime,units,value,wigos_station_identifier"
 )
 
-# -------------------- Fuente del polígono --------------------
-# Preferir archivo local (setear en Render: CERRO_SHAPE_FILE=./data/cerro_largo.geojson)
-CERRO_SHAPE_FILE = (os.getenv("CERRO_SHAPE_FILE") or "").strip()
-# Alternativa remota (fallback)
-CERRO_GEOJSON_URL = (
-    os.getenv("CERRO_GEOJSON_URL")
-    or "https://cerro-largo-frontend.onrender.com/cerro_largo_municipios_2025.geojson"
-).strip()
-
-# Cache del polígono
-_CERRO_POLY = None
-_CERRO_LAST = 0.0
-_CERRO_TTL = 600  # 10 min
-_CERRO_SWAPPED = False  # si se detectó y corrigió lat/lon en la forma
-
-# -------------------- Helpers geom --------------------
-def _uy_bounds_ok(bounds) -> bool:
-    minx, miny, maxx, maxy = bounds
-    return (-59 <= minx <= -50) and (-36 <= miny <= -29) and \
-           (-59 <= maxx <= -50) and (-36 <= maxy <= -29)
-
-def _normalize_lonlat(geom):
-    """
-    Asegura (lon,lat). Si parece (lat,lon), intercambia ejes.
-    Devuelve (geom_normalizado, swapped_bool).
-    """
-    swapped = shp_transform(lambda x, y, z=None: (y, x), geom)
-    if not _uy_bounds_ok(geom.bounds) and _uy_bounds_ok(swapped.bounds):
-        return swapped, True
-    return geom, False
-
-def _as_geojson_geom(shp):
-    """
-    Devuelve Geometry válido según https://geojson.org/schema/Geometry.json
-    - Asegura anillos cerrados en Polygon/MultiPolygon
-    - Mantiene lon,lat (CRS84) ya normalizado por _normalize_lonlat
-    """
-    if isinstance(shp, Polygon):
-        g = mapping(shp)
-        coords = g["coordinates"]
-        ext = list(coords[0])
-        if ext and ext[0] != ext[-1]:
-            ext.append(ext[0])
-        holes = []
-        for ring in coords[1:]:
-            r = list(ring)
-            if r and r[0] != r[-1]:
-                r.append(r[0])
-            holes.append(r)
-        return {"type": "Polygon", "coordinates": [ext] + holes}
-
-    if isinstance(shp, MultiPolygon):
-        parts = []
-        for poly in shp.geoms:
-            pg = _as_geojson_geom(poly)  # Polygon
-            parts.append(pg["coordinates"])
-        return {"type": "MultiPolygon", "coordinates": parts}
-
-    # fallback para otras geometrías válidas (Point/LineString, etc.)
-    return mapping(shp)
-
-def _polygons_from_kml_bytes(kml_bytes: bytes):
-    """Extrae polígonos de un KML (bytes)."""
-    ns = {'k': 'http://www.opengis.net/kml/2.2'}
-    root = ET.fromstring(kml_bytes)
-    polys = []
-    for pm in root.findall('.//k:Placemark', ns):
-        for poly in pm.findall('.//k:Polygon', ns):
-            coords_el = poly.find('.//k:outerBoundaryIs/k:LinearRing/k:coordinates', ns)
-            if coords_el is None:
-                coords_el = poly.find('.//k:coordinates', ns)
-            if not coords_el or not (coords_el.text or '').strip():
-                continue
-            coords = []
-            for tok in coords_el.text.strip().split():
-                parts = tok.split(',')
-                if len(parts) >= 2:
-                    try:
-                        lon = float(parts[0]); lat = float(parts[1])
-                        coords.append((lon, lat))
-                    except Exception:
-                        pass
-            if len(coords) >= 3:
-                try:
-                    polys.append(Polygon(coords))
-                except Exception:
-                    pass
-    return polys
-
-def _load_polygon_from_file(path: str):
-    """Carga polígono/multipolígono desde archivo local .kmz/.kml/.geojson."""
-    path = os.path.abspath(path)
-    if not os.path.exists(path):
-        raise RuntimeError(f"Archivo de forma no encontrado: {path}")
-
-    ext = os.path.splitext(path)[1].lower()
-    if ext == ".kmz":
-        with zipfile.ZipFile(path, 'r') as z:
-            kml_name = "doc.kml" if "doc.kml" in z.namelist() else None
-            if not kml_name:
-                for n in z.namelist():
-                    if n.lower().endswith(".kml"):
-                        kml_name = n
-                        break
-            if not kml_name:
-                raise RuntimeError("KMZ sin KML interno")
-            polys = _polygons_from_kml_bytes(z.read(kml_name))
-    elif ext == ".kml":
-        with open(path, "rb") as f:
-            polys = _polygons_from_kml_bytes(f.read())
-    elif ext in (".geojson", ".json"):
-        with open(path, "r", encoding="utf-8") as f:
-            gj = json.load(f)
-        polys = []
-        for ft in (gj.get("features") or []):
-            g = ft.get("geometry")
-            if not g:
-                continue
-            shp = shp_shape(g)
-            if isinstance(shp, (Polygon, MultiPolygon)):
-                polys.append(shp)
-    else:
-        raise RuntimeError("Formato no soportado (usa .kmz/.kml/.geojson)")
-
-    if not polys:
-        raise RuntimeError("No se encontraron polígonos en el archivo de forma")
-    return unary_union(polys)
-
-def _load_polygon_from_url(url: str):
-    r = requests.get(url, timeout=12)
-    r.raise_for_status()
-    gj = r.json()
-    polys = []
-    for ft in (gj.get("features") or []):
-        g = ft.get("geometry")
-        if not g:
-            continue
-        shp = shp_shape(g)
-        if isinstance(shp, (Polygon, MultiPolygon)):
-            polys.append(shp)
-    if not polys:
-        raise RuntimeError("GeoJSON remoto sin polígonos válidos")
-    return unary_union(polys)
-
-def _load_cerro_polygon():
-    """Carga la forma (local o remota), normaliza lon/lat y la cachea."""
-    global _CERRO_POLY, _CERRO_LAST, _CERRO_SWAPPED
-    now = time.time()
-    if _CERRO_POLY is not None and (now - _CERRO_LAST) < _CERRO_TTL:
-        return _CERRO_POLY
-
-    if CERRO_SHAPE_FILE:
-        union = _load_polygon_from_file(CERRO_SHAPE_FILE)
-    else:
-        union = _load_polygon_from_url(CERRO_GEOJSON_URL)
-
-    union_norm, swapped = _normalize_lonlat(union)
-    _CERRO_POLY = union_norm
-    _CERRO_LAST = now
-    _CERRO_SWAPPED = swapped
-    return _CERRO_POLY
-
-# -------------------- Helpers texto --------------------
+# -------------------- Texto: Cerro Largo --------------------
 _DEPT_TOKENS = {
     "cerro largo", "cerrolargo", "c largo", "c.largo", "dpto cerro largo",
 }
@@ -237,16 +68,15 @@ def _mentions_cerro_largo(props: dict) -> bool:
 # -------------------- WIS2 signal (messages) --------------------
 def _wis2_signal(limit=50):
     """
-    Si cap-alerts/items viene vacío, consultamos la colección 'messages'
-    filtrando por metadata_id=urn:wmo:md:uy-inumet:cap-alerts para saber
-    si hubo publicaciones recientes. Devuelve campos existentes en 'messages'.
+    Si cap-alerts/items viene vacío, consultamos 'messages'
+    filtrando por metadata_id=urn:wmo:md:uy-inumet:cap-alerts.
     """
     try:
         params = {
             "f": "json",
             "limit": limit,
-            "metadata_id": WIS2_METADATA_ID,   # según OpenAPI
-            "sortby": "-datetime",             # lo más nuevo primero (si está soportado)
+            "metadata_id": WIS2_METADATA_ID,
+            "sortby": "-datetime",   # si el server lo soporta
         }
         r = requests.get(
             INUMET_MESSAGES,
@@ -277,11 +107,9 @@ def _wis2_signal(limit=50):
 # -------------------- Endpoints --------------------
 @inumet_bp.get("/")
 def inumet_base():
-    src = CERRO_SHAPE_FILE or CERRO_GEOJSON_URL
     return jsonify({
         "ok": True,
         "service": "inumet",
-        "shape_source": src,
         "endpoints": [
             "/api/inumet/alerts/raw",
             "/api/inumet/alerts/cerro-largo",
@@ -322,7 +150,6 @@ def alerts_raw():
             "features_sample": (payload.get("features") or [])[:2],
         }
 
-        # Señal WIS2 si viene vacío
         if (payload.get("numberReturned") or 0) == 0:
             resp["wis2"] = _wis2_signal()
 
@@ -338,23 +165,16 @@ def alerts_raw():
 @inumet_bp.get("/alerts/cerro-largo")
 def alerts_cerro_largo():
     """
-    1) Incluye alertas con geometría que intersecten la forma del dpto.
-    2) Fallback textual: si no intersecta / no hay geometría,
-       se incluye si el texto menciona 'Cerro Largo' o localidades.
-    3) Si no hay items, agrega 'señal' WIS2 (messages).
-    ?include_geometry=1 para incluir Geometry válido según schema.
-    ?debug=1 devuelve métricas y diagnósticos.
+    Sin geometría: usa sólo texto para detectar Cerro Largo.
+    Si no hay items, devuelve alerta sintética cuando hay 'señal' en messages.
     """
     try:
-        poly = _load_cerro_polygon()
-        include_geom = request.args.get("include_geometry") == "1"
-
         r = requests.get(
             INUMET_CAP_ALERTS,
             params={
                 "f": "json",
                 "limit": 200,
-                "skipGeometry": False,
+                "skipGeometry": True,   # limpiamos dependencias
                 "properties": COMMON_PROPS,
             },
             headers={"Accept": "application/json"},
@@ -373,32 +193,11 @@ def alerts_cerro_largo():
         payload = r.json()
         feats = payload.get("features") or []
 
-        total = len(feats)
-        with_geom = 0
-        intersect_count = 0
-        text_fallback = 0
         out = []
-
         for f in feats:
             props = f.get("properties", {}) or {}
-            geom = f.get("geometry")
-            added = False
-            shp = None
-
-            if geom:
-                with_geom += 1
-                shp = shp_shape(geom)
-                shp, _ = _normalize_lonlat(shp)
-                if poly.intersects(shp):
-                    intersect_count += 1
-                    added = True
-
-            if not added and _mentions_cerro_largo(props):
-                text_fallback += 1
-                added = True
-
-            if added:
-                item = {
+            if _mentions_cerro_largo(props):
+                out.append({
                     "reportId": props.get("reportId"),
                     "name": props.get("name") or "Alerta INUMET",
                     "description": props.get("description") or "",
@@ -407,17 +206,31 @@ def alerts_cerro_largo():
                     "units": props.get("units"),
                     "value": props.get("value"),
                     "wigos_station_identifier": props.get("wigos_station_identifier"),
-                }
-                if include_geom and shp is not None:
-                    item["geometry"] = _as_geojson_geom(shp)  # válido por schema
-                out.append(item)
+                })
 
-        # Ordenar por más reciente si existe reportTime
-        out.sort(key=lambda x: (x.get("reportTime") or ""), reverse=True)
-
+        # Si no hay alertas y el feed devolvió 0, intentamos señal WIS2
         wis2 = None
         if len(out) == 0 and (payload.get("numberReturned") or 0) == 0:
             wis2 = _wis2_signal()
+            # Generar alerta sintética si hay señal, para que el widget muestre algo
+            if wis2 and wis2.get("ok") and wis2.get("has_signal"):
+                out.append({
+                    "reportId": wis2.get("last_data_id") or "wis2-signal",
+                    "name": "Aviso INUMET (señal WIS2)",
+                    "description": (
+                        "Se detectó notificación reciente en WIS2 para cap-alerts, "
+                        "pero el listado HTTP de alertas está vacío. Puede haber "
+                        "desfase de publicación."
+                    ),
+                    "phenomenonTime": None,
+                    "reportTime": wis2.get("last_datetime"),
+                    "units": None,
+                    "value": None,
+                    "wigos_station_identifier": None,
+                })
+
+        # Ordenar por más reciente
+        out.sort(key=lambda x: (x.get("reportTime") or ""), reverse=True)
 
         if request.args.get("debug") == "1":
             return jsonify({
@@ -426,14 +239,6 @@ def alerts_cerro_largo():
                 "alerts": out,
                 "feed_numberMatched": payload.get("numberMatched"),
                 "feed_numberReturned": payload.get("numberReturned"),
-                "feed_features_total": total,
-                "feed_with_geometry": with_geom,
-                "poly_bounds": _load_cerro_polygon().bounds,
-                "poly_swapped": _CERRO_SWAPPED,
-                "intersect_count": intersect_count,
-                "text_fallback_count": text_fallback,
-                "polygon_source": CERRO_SHAPE_FILE or CERRO_GEOJSON_URL,
-                "polygon_ttl": _CERRO_TTL,
                 "wis2": wis2,
             }), 200
 
