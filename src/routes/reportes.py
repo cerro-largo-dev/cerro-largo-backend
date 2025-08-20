@@ -7,122 +7,125 @@ from src.utils.email_service import EmailService
 
 reportes_bp = Blueprint('reportes', __name__)
 
-# Configuración para subida de archivos
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+# ---- Configuración de subida ----
+# Si no querés admitir webp/heic, quitálas de la lista.
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif'}
 MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
 
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def allowed_file(filename: str) -> bool:
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def get_static_root() -> str:
+    """Devuelve un static_root válido incluso si static_folder es None."""
+    return current_app.static_folder or os.path.join(current_app.root_path, 'static')
+
+def get_upload_dir() -> str:
+    """Devuelve el directorio absoluto para /uploads/reportes y lo asegura."""
+    static_root = get_static_root()
+    upload_dir = os.path.join(static_root, 'uploads', 'reportes')
+    os.makedirs(upload_dir, exist_ok=True)
+    return upload_dir
 
 @reportes_bp.route('/reportes', methods=['POST'])
 def crear_reporte():
     try:
-        # Obtener datos del formulario
+        # -------- Datos del formulario --------
         descripcion = request.form.get('descripcion')
         nombre_lugar = request.form.get('nombre_lugar', '')
         latitud = request.form.get('latitud')
         longitud = request.form.get('longitud')
-        
-        # Validar datos obligatorios
+
         if not descripcion:
             return jsonify({'error': 'La descripción es obligatoria'}), 400
-        
-        # Convertir coordenadas a float si están presentes
+
+        # Coordenadas a float (si vienen)
         try:
             latitud = float(latitud) if latitud else None
             longitud = float(longitud) if longitud else None
         except (ValueError, TypeError):
             latitud = None
             longitud = None
-        
-        # Crear el reporte
+
+        # -------- Crear reporte --------
         nuevo_reporte = Reporte(
             descripcion=descripcion,
             nombre_lugar=nombre_lugar if nombre_lugar else None,
             latitud=latitud,
             longitud=longitud
         )
-        
         db.session.add(nuevo_reporte)
-        db.session.commit()  # Confirmar la transacción para que nuevo_reporte.id y fecha_creacion estén disponibles
-        
-        # Procesar archivos de fotos
+        db.session.commit()  # para tener id y fecha_creacion
+
+        # -------- Fotos --------
         fotos_guardadas = []
         fotos_rechazadas = []
-        
+
         if 'fotos' in request.files:
             fotos = request.files.getlist('fotos')
-            
-            # Crear directorio de uploads si no existe
-            upload_dir = os.path.join(current_app.static_folder, 'uploads', 'reportes')
-            os.makedirs(upload_dir, exist_ok=True)
-            
+            upload_dir = get_upload_dir()
+
             for foto in fotos:
-                if foto and foto.filename:
-                    # Verificar tamaño del archivo
-                    foto.seek(0, 2)  # Ir al final del archivo
-                    file_size = foto.tell()
-                    foto.seek(0)  # Volver al inicio
-                    
-                    if file_size > MAX_FILE_SIZE:
+                if not (foto and foto.filename):
+                    continue
+
+                # Tamaño
+                foto.seek(0, os.SEEK_END)
+                file_size = foto.tell()
+                foto.seek(0)
+
+                if file_size > MAX_FILE_SIZE:
+                    fotos_rechazadas.append({
+                        'nombre': foto.filename,
+                        'razon': f'Archivo demasiado grande ({file_size/(1024*1024):.1f}MB). '
+                                 f'Máximo permitido: {MAX_FILE_SIZE/(1024*1024):.1f}MB'
+                    })
+                    continue
+
+                if not allowed_file(foto.filename):
+                    fotos_rechazadas.append({
+                        'nombre': foto.filename,
+                        'razon': f'Tipo de archivo no permitido. Permitidos: {", ".join(sorted(ALLOWED_EXTENSIONS))}'
+                    })
+                    continue
+
+                try:
+                    # Nombre único y seguro
+                    extension = foto.filename.rsplit('.', 1)[1].lower()
+                    nombre_unico = f"{uuid.uuid4().hex}.{extension}"
+                    nombre_seguro = secure_filename(nombre_unico)
+
+                    # Guardar
+                    ruta_archivo_abs = os.path.join(upload_dir, nombre_seguro)
+                    foto.save(ruta_archivo_abs)
+
+                    if not os.path.exists(ruta_archivo_abs):
                         fotos_rechazadas.append({
                             'nombre': foto.filename,
-                            'razon': f'Archivo demasiado grande ({file_size / (1024*1024):.1f}MB). Máximo permitido: {MAX_FILE_SIZE / (1024*1024)}MB'
+                            'razon': 'Error al guardar el archivo en el servidor'
                         })
                         continue
-                    
-                    if not allowed_file(foto.filename):
-                        fotos_rechazadas.append({
-                            'nombre': foto.filename,
-                            'razon': f'Tipo de archivo no permitido. Tipos permitidos: {", ".join(ALLOWED_EXTENSIONS)}'
-                        })
-                        continue
-                    
-                    try:
-                        # Generar nombre único para el archivo
-                        extension = foto.filename.rsplit('.', 1)[1].lower()
-                        nombre_unico = f"{uuid.uuid4().hex}.{extension}"
-                        nombre_seguro = secure_filename(nombre_unico)
-                        
-                        # Guardar archivo
-                        ruta_archivo = os.path.join(upload_dir, nombre_seguro)
-                        foto.save(ruta_archivo)
-                        
-                        # Verificar que el archivo se guardó correctamente
-                        if not os.path.exists(ruta_archivo):
-                            fotos_rechazadas.append({
-                                'nombre': foto.filename,
-                                'razon': 'Error al guardar el archivo en el servidor'
-                            })
-                            continue
-                        
-                        # Crear registro en la base de datos
-                        foto_reporte = FotoReporte(
-                            reporte_id=nuevo_reporte.id,
-                            nombre_archivo=foto.filename,
-                            ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
-                        )
-                        
-                        db.session.add(foto_reporte)
-                        fotos_guardadas.append(foto_reporte.to_dict())
-                        
-                    except Exception as foto_error:
-                        current_app.logger.error(f"Error al procesar foto {foto.filename}: {str(foto_error)}")
-                        fotos_rechazadas.append({
-                            'nombre': foto.filename,
-                            'razon': f'Error al procesar el archivo: {str(foto_error)}'
-                        })
-                        continue
-        
-        # Confirmar transacción
+
+                    # Registro DB (ruta pública relativa a /static)
+                    foto_reporte = FotoReporte(
+                        reporte_id=nuevo_reporte.id,
+                        nombre_archivo=foto.filename,
+                        ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
+                    )
+                    db.session.add(foto_reporte)
+                    fotos_guardadas.append(foto_reporte.to_dict())
+
+                except Exception as foto_error:
+                    current_app.logger.error(f"Error al procesar foto {foto.filename}: {str(foto_error)}")
+                    fotos_rechazadas.append({
+                        'nombre': foto.filename,
+                        'razon': f'Error al procesar el archivo: {str(foto_error)}'
+                    })
+
         db.session.commit()
-        
-        # Enviar reporte por email
+
+        # -------- Email (no rompe si falla) --------
         try:
             email_service = EmailService()
-            
-            # Preparar datos del reporte para el email
             reporte_email_data = {
                 'descripcion': descripcion,
                 'nombre_lugar': nombre_lugar,
@@ -130,70 +133,57 @@ def crear_reporte():
                 'longitud': longitud,
                 'fecha_creacion': nuevo_reporte.fecha_creacion.isoformat() if nuevo_reporte.fecha_creacion else None
             }
-            
-            # Preparar rutas de fotos para adjuntar
+
+            # Rutas absolutas para adjuntos
             rutas_fotos = []
             if fotos_guardadas:
-                upload_dir = os.path.join(current_app.static_folder, 'uploads', 'reportes')
+                upload_dir = get_upload_dir()
                 for foto in fotos_guardadas:
-                    # Extraer nombre del archivo de la ruta
                     nombre_archivo = foto['ruta_archivo'].split('/')[-1]
                     ruta_completa = os.path.join(upload_dir, nombre_archivo)
                     if os.path.exists(ruta_completa):
                         rutas_fotos.append(ruta_completa)
-            
-            # Enviar email
-            email_enviado = email_service.enviar_reporte_ciudadano(reporte_email_data, rutas_fotos)
-            
-            if email_enviado:
+
+            email_ok = email_service.enviar_reporte_ciudadano(reporte_email_data, rutas_fotos)
+            if email_ok:
                 current_app.logger.info(f"Email enviado exitosamente para reporte ID: {nuevo_reporte.id}")
             else:
                 current_app.logger.warning(f"No se pudo enviar email para reporte ID: {nuevo_reporte.id}")
-                
+
         except Exception as email_error:
-            # No fallar la creación del reporte si el email falla
             current_app.logger.error(f"Error al enviar email para reporte ID {nuevo_reporte.id}: {str(email_error)}")
-        
-        # Preparar respuesta
+
+        # -------- Respuesta --------
         reporte_dict = nuevo_reporte.to_dict()
         reporte_dict['fotos'] = fotos_guardadas
-        
-        response_data = {
+
+        resp = {
             'mensaje': 'Reporte creado exitosamente',
             'reporte': reporte_dict
         }
-        
-        # Incluir información sobre fotos rechazadas si las hay
         if fotos_rechazadas:
-            response_data['fotos_rechazadas'] = fotos_rechazadas
-            response_data['mensaje'] += f' (Se rechazaron {len(fotos_rechazadas)} fotos)'
-        
-        return jsonify(response_data), 201
-        
+            resp['fotos_rechazadas'] = fotos_rechazadas
+            resp['mensaje'] += f' (Se rechazaron {len(fotos_rechazadas)} fotos)'
+
+        return jsonify(resp), 201
+
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error al crear reporte: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
 
+
 @reportes_bp.route('/reportes', methods=['GET'])
 def obtener_reportes():
     try:
-        # Obtener parámetros de paginación
         page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
-        
-        # Limitar per_page para evitar sobrecarga
-        per_page = min(per_page, 100)
-        
-        # Obtener reportes paginados
+        per_page = min(request.args.get('per_page', 10, type=int), 100)
+
         reportes_paginados = Reporte.query.order_by(Reporte.fecha_creacion.desc()).paginate(
-            page=page, 
-            per_page=per_page, 
-            error_out=False
+            page=page, per_page=per_page, error_out=False
         )
-        
-        reportes_lista = [reporte.to_dict() for reporte in reportes_paginados.items]
-        
+        reportes_lista = [r.to_dict() for r in reportes_paginados.items]
+
         return jsonify({
             'reportes': reportes_lista,
             'total': reportes_paginados.total,
@@ -201,46 +191,39 @@ def obtener_reportes():
             'current_page': page,
             'per_page': per_page
         }), 200
-        
+
     except Exception as e:
         current_app.logger.error(f"Error al obtener reportes: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
+
 
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['GET'])
 def obtener_reporte(reporte_id):
     try:
         reporte = Reporte.query.get_or_404(reporte_id)
         return jsonify({'reporte': reporte.to_dict()}), 200
-        
     except Exception as e:
         current_app.logger.error(f"Error al obtener reporte {reporte_id}: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
+
 
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['DELETE'])
 def eliminar_reporte(reporte_id):
     try:
         reporte = Reporte.query.get_or_404(reporte_id)
-        
-        # Eliminar archivos de fotos del sistema de archivos
+
+        # borrar archivos físicos
+        static_root = get_static_root()
         for foto in reporte.fotos:
-            ruta_completa = os.path.join(current_app.static_folder, foto.ruta_archivo.lstrip('/'))
+            ruta_completa = os.path.join(static_root, foto.ruta_archivo.lstrip('/'))
             if os.path.exists(ruta_completa):
                 os.remove(ruta_completa)
-        
-        # Eliminar reporte (las fotos se eliminan automáticamente por cascade)
+
         db.session.delete(reporte)
         db.session.commit()
-        
         return jsonify({'mensaje': 'Reporte eliminado exitosamente'}), 200
-        
+
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error al eliminar reporte {reporte_id}: {str(e)}")
-        return jsonify({'error': 'Error interno del servidor'}), 500
-
-
-
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error al crear reporte: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
