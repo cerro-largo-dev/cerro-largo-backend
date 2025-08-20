@@ -1,4 +1,4 @@
-# main.py (PostgreSQL por ENV → fallback a SQLite)
+# main.py (PostgreSQL por ENV → fallback a SQLite, con STATIC_ROOT)
 import os
 import sys
 from datetime import datetime
@@ -30,10 +30,15 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret")
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DB_PATH = os.path.join(BASE_DIR, "database", "app.db")
 
+# STATIC_ROOT real para subir/leer adjuntos (fotos de reportes)
+STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(BASE_DIR, "static"))
+os.makedirs(os.path.join(STATIC_ROOT, "uploads", "reportes"), exist_ok=True)
+
 # -----------------------------------------------------------------------------
 # App & CORS
 # -----------------------------------------------------------------------------
-app = Flask(__name__, static_folder=None)
+# IMPORTANTE: Ya NO usamos static_folder=None para que current_app.static_folder exista
+app = Flask(__name__, static_folder=STATIC_ROOT)
 app.url_map.strict_slashes = False
 app.secret_key = SECRET_KEY
 app.config.update(
@@ -77,7 +82,11 @@ app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")
 # Seed inicial de zonas (si la tabla está vacía)
 # -----------------------------------------------------------------------------
 DESIRED_ZONE_ORDER = [
-  'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
+     'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
+'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
+'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
+'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
+'Melo (GCB)', 'Melo (GEB)'  'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
 'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
 'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
 'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
