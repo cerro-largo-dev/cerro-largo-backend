@@ -3,18 +3,17 @@
 """
 INUMET alerts router (WIS2 / OGC API)
 - Lee cap-alerts/items con los campos del schema oficial
-- Si viene vacío, consulta 'messages' por metadata_id y genera una alerta sintética
+- Si viene vacío, consulta 'messages' por metadata_id (señal WIS2)
+- SOLO genera alerta sintética si la señal es reciente (<= INUMET_SIGNAL_MAX_AGE_HOURS)
 - Filtro textual por Cerro Largo (si la descripción/nombre lo mencionan)
 - ?debug=1 devuelve métricas
 
 Requisitos:
   - requests
 """
-
 import os
-import time
-import json
 import unicodedata
+import datetime as dt
 
 import requests
 from flask import Blueprint, jsonify, request
@@ -34,6 +33,10 @@ WIS2_METADATA_ID = "urn:wmo:md:uy-inumet:cap-alerts"
 COMMON_PROPS = (
     "description,name,phenomenonTime,reportId,reportTime,units,value,wigos_station_identifier"
 )
+
+# -------------------- Config: frescura de la señal WIS2 --------------------
+# Por defecto, solo aceptamos señal <= 12h para crear la alerta sintética
+SIGNAL_MAX_AGE_HOURS = int(os.getenv("INUMET_SIGNAL_MAX_AGE_HOURS", "12"))
 
 # -------------------- Texto: Cerro Largo --------------------
 _DEPT_TOKENS = {
@@ -65,6 +68,28 @@ def _mentions_cerro_largo(props: dict) -> bool:
         return True
     return False
 
+# -------------------- Helpers tiempo --------------------
+def _parse_iso_utc(s: str):
+    """Devuelve datetime timezone-aware en UTC o None."""
+    if not s:
+        return None
+    try:
+        # Maneja 'Z'
+        if s.endswith("Z"):
+            return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.datetime.fromisoformat(s) if "+" in s else dt.datetime.fromisoformat(s + "+00:00")
+    except Exception:
+        return None
+
+def _is_recent(iso_dt: str, max_age_hours: int) -> bool:
+    """True si iso_dt dentro de max_age_hours respecto a ahora (UTC)."""
+    d = _parse_iso_utc(iso_dt)
+    if not d:
+        return False
+    now = dt.datetime.now(dt.timezone.utc)
+    age = now - d
+    return age.total_seconds() <= max_age_hours * 3600
+
 # -------------------- WIS2 signal (messages) --------------------
 def _wis2_signal(limit=50):
     """
@@ -93,12 +118,16 @@ def _wis2_signal(limit=50):
             return {"ok": True, "has_signal": False}
 
         props = (feats[0].get("properties") or {})
+        last_dt = props.get("datetime") or props.get("time") or props.get("pubtime")
         return {
             "ok": True,
             "has_signal": True,
-            "last_datetime": props.get("datetime") or props.get("time") or props.get("pubtime"),
+            "last_datetime": last_dt,
             "last_data_id": props.get("data_id"),
             "last_metadata_id": props.get("metadata_id"),
+            "last_age_hours": None if not last_dt else round(
+                (dt.datetime.now(dt.timezone.utc) - _parse_iso_utc(last_dt)).total_seconds() / 3600, 2
+            ),
             "returned": len(feats),
         }
     except Exception as e:
@@ -166,7 +195,7 @@ def alerts_raw():
 def alerts_cerro_largo():
     """
     Sin geometría: usa sólo texto para detectar Cerro Largo.
-    Si no hay items, devuelve alerta sintética cuando hay 'señal' en messages.
+    Si no hay items, devuelve alerta sintética SOLO si la señal es reciente.
     """
     try:
         r = requests.get(
@@ -174,7 +203,7 @@ def alerts_cerro_largo():
             params={
                 "f": "json",
                 "limit": 200,
-                "skipGeometry": True,   # limpiamos dependencias
+                "skipGeometry": True,
                 "properties": COMMON_PROPS,
             },
             headers={"Accept": "application/json"},
@@ -212,22 +241,22 @@ def alerts_cerro_largo():
         wis2 = None
         if len(out) == 0 and (payload.get("numberReturned") or 0) == 0:
             wis2 = _wis2_signal()
-            # Generar alerta sintética si hay señal, para que el widget muestre algo
             if wis2 and wis2.get("ok") and wis2.get("has_signal"):
-                out.append({
-                    "reportId": wis2.get("last_data_id") or "wis2-signal",
-                    "name": "Aviso INUMET (señal WIS2)",
-                    "description": (
-                        "Se detectó notificación reciente en WIS2 para cap-alerts, "
-                        "pero el listado HTTP de alertas está vacío. Puede haber "
-                        "desfase de publicación."
-                    ),
-                    "phenomenonTime": None,
-                    "reportTime": wis2.get("last_datetime"),
-                    "units": None,
-                    "value": None,
-                    "wigos_station_identifier": None,
-                })
+                # solo si la señal es reciente
+                if _is_recent(wis2.get("last_datetime"), SIGNAL_MAX_AGE_HOURS):
+                    out.append({
+                        "reportId": wis2.get("last_data_id") or "wis2-signal",
+                        "name": "Aviso INUMET (señal WIS2)",
+                        "description": (
+                            "Notificación reciente en WIS2 para cap-alerts; "
+                            "el listado HTTP aún está vacío (posible desfase)."
+                        ),
+                        "phenomenonTime": None,
+                        "reportTime": wis2.get("last_datetime"),
+                        "units": None,
+                        "value": None,
+                        "wigos_station_identifier": None,
+                    })
 
         # Ordenar por más reciente
         out.sort(key=lambda x: (x.get("reportTime") or ""), reverse=True)
@@ -240,6 +269,7 @@ def alerts_cerro_largo():
                 "feed_numberMatched": payload.get("numberMatched"),
                 "feed_numberReturned": payload.get("numberReturned"),
                 "wis2": wis2,
+                "signal_max_age_hours": SIGNAL_MAX_AGE_HOURS,
             }), 200
 
         return jsonify({"ok": True, "count": len(out), "alerts": out, "wis2": wis2}), 200
