@@ -30,7 +30,10 @@ def _load_cerro_polygon():
     if _CERRO_POLY is not None and (now - _CERRO_LAST) < _CERRO_TTL:
         return _CERRO_POLY
 
-    src = CERRO_GEOJSON_URL.strip()
+    src = (CERRO_GEOJSON_URL or "").strip()
+    if not src:
+        raise RuntimeError("CERRO_GEOJSON_URL vacío")
+
     if src.startswith("file://"):
         with open(src.replace("file://", ""), "r", encoding="utf-8") as f:
             gj = json.load(f)
@@ -98,7 +101,6 @@ def alerts_raw():
             }), r.status_code
 
         payload = r.json()
-        # devuelvo metadatos y una muestra
         return jsonify({
             "ok": True,
             "status": r.status_code,
@@ -117,7 +119,7 @@ def alerts_raw():
 
 @inumet_bp.get("/alerts/cerro-largo")
 def alerts_cerro_largo():
-    """Alertas CAP que intersecten Cerro Largo. Agrega ?debug=1 para métricas."""
+    """Alertas CAP que intersecten Cerro Largo. `?debug=1` agrega métricas."""
     try:
         poly = _load_cerro_polygon()
 
@@ -144,9 +146,13 @@ def alerts_cerro_largo():
         for f in feats:
             geom = f.get("geometry")
             if not geom:
+                # fallback: si no hay geometry, podés usar props.areaDesc (comentado)
+                # area = (f.get("properties", {}).get("areaDesc") or "").lower()
+                # if "cerro largo" in area: ...  # incluir
                 continue
             if not poly.intersects(shape(geom)):
                 continue
+
             props = f.get("properties", {}) or {}
             out.append({
                 "id": props.get("reportId") or props.get("id"),
