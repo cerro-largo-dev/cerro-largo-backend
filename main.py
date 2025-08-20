@@ -77,10 +77,11 @@ app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")
 # Seed inicial de zonas (si la tabla está vacía)
 # -----------------------------------------------------------------------------
 DESIRED_ZONE_ORDER = [
-    "ACEGUÁ","FRAILE MUERTO","RÍO BRANCO","TUPAMBAÉ","LAS CAÑAS","ISIDORO NOBLÍA",
-    "CERRO DE LAS CUENTAS","ARÉVALO","BAÑADO DE MEDINA","TRES ISLAS","LAGUNA MERÍN",
-    "CENTURIÓN","RAMÓN TRIGO","ARBOLITO","QUEBRACHO","PLÁCIDO ROSAS",
-    "Melo (GBA)","Melo (GBB)","Melo (GBC)","Melo (GCB)","Melo (GEB)"
+  'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
+'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
+'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
+'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
+'Melo (GCB)', 'Melo (GEB)'
 ]
 with app.app_context():
     db.create_all()
