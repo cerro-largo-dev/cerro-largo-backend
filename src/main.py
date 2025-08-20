@@ -1,8 +1,8 @@
-# main.py
+# main.py (versión saneada)
 import os
 import sys
 from datetime import datetime
-from flask import Flask, jsonify, send_from_directory, request
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 # --- Import paths (raíz del proyecto) ---
@@ -16,7 +16,7 @@ from src.routes.admin import admin_bp
 from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
 from src.routes.notify import notify_bp
-from src.routes.inumet import inumet_bp# suscripciones WhatsApp - stub
+from src.routes.inumet import inumet_bp  # <- INUMET
 
 # -----------------------------------------------------------------------------
 # Config básica
@@ -35,9 +35,7 @@ DB_PATH = os.path.join(BASE_DIR, "database", "app.db")
 # -----------------------------------------------------------------------------
 # Desactivar estáticos para NO servir HTML/SPA desde el backend
 app = Flask(__name__, static_folder=None)
-
-# Evitar 308 por barra final (que suele “volcar” HTML)
-app.url_map.strict_slashes = False
+app.url_map.strict_slashes = False  # evita 308 por barra final
 
 app.secret_key = SECRET_KEY
 app.config.update(
@@ -52,7 +50,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
-# CORS sólo para /api/* con credenciales
+# CORS sólo para /api/* con credenciales (ajusta origins si necesitás)
 CORS(
     app,
     supports_credentials=True,
@@ -67,7 +65,7 @@ app.register_blueprint(admin_bp,    url_prefix="/api/admin")
 app.register_blueprint(report_bp,   url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
 app.register_blueprint(notify_bp,   url_prefix="/api/notify")
-app.register_blueprint(inumet_bp, url_prefix="/api/inumet")
+app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")  # <- INUMET
 
 # -----------------------------------------------------------------------------
 # Seed inicial de zonas (sólo si la tabla está vacía)
@@ -79,7 +77,6 @@ DESIRED_ZONE_ORDER = [
     "QUEBRACHO", "PLÁCIDO ROSAS", "Melo (GBA)", "Melo (GBB)",
     "Melo (GBC)", "Melo (GCB)", "Melo (GEB)"
 ]
-
 with app.app_context():
     db.create_all()
     try:
@@ -94,33 +91,32 @@ with app.app_context():
         print("Seed de zonas falló:", e)
 
 # -----------------------------------------------------------------------------
-# Health (coincide con render.yaml: /api/health)
+# Health (coincide con render.yaml) + alias
 # -----------------------------------------------------------------------------
 @app.get("/api/health")
 def api_health():
     return jsonify({"ok": True, "service": "backend"}), 200
 
-# -----------------------------------------------------------------------------
-# Rutas utilitarias
-# -----------------------------------------------------------------------------
-@app.route("/healthz")
-def healthz():
-    return jsonify({"ok": True}), 200
+@app.get("/api/healthz")
+def api_healthz():
+    return jsonify({"ok": True, "service": "backend"}), 200
 
 # -----------------------------------------------------------------------------
-# Catch-all: NUNCA servir HTML/SPA desde el backend
+# Raíz y catch-all: NUNCA servir HTML/SPA desde backend
 # -----------------------------------------------------------------------------
+@app.get("/")
+def root():
+    return jsonify({"message": "Backend API activo"}), 200
+
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
-def serve_spa(path):
-    # Si alguien pega a /api/... inexistente → JSON 404
+def catch_all(path):
     if path.startswith("api/"):
         return jsonify({"ok": False, "error": "not found", "path": f"/{path}"}), 404
-    # Para cualquier otra ruta fuera de /api → JSON simple (no HTML)
     return jsonify({"message": "Backend API activo"}), 200
 
 # -----------------------------------------------------------------------------
-# Manejo de errores: devolver JSON en /api/*
+# Errores como JSON dentro de /api/*
 # -----------------------------------------------------------------------------
 @app.errorhandler(404)
 def _not_found(e):
@@ -136,7 +132,6 @@ def _method_not_allowed(e):
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    # Evitar páginas HTML en errores de API
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": False, "error": "internal error"}), 500
