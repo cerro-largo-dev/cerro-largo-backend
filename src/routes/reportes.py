@@ -1,3 +1,4 @@
+# src/routes/reportes.py
 import os
 import uuid
 from flask import Blueprint, request, jsonify, current_app
@@ -8,7 +9,6 @@ from src.utils.email_service import EmailService
 reportes_bp = Blueprint('reportes', __name__)
 
 # ---- Configuración de subida ----
-# Si no querés admitir webp/heic, quitálas de la lista.
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif'}
 MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
 
@@ -54,7 +54,7 @@ def crear_reporte():
             longitud=longitud
         )
         db.session.add(nuevo_reporte)
-        db.session.commit()  # para tener id y fecha_creacion
+        db.session.commit()  # tener id y fecha_creacion
 
         # -------- Fotos --------
         fotos_guardadas = []
@@ -217,7 +217,10 @@ def eliminar_reporte(reporte_id):
         for foto in reporte.fotos:
             ruta_completa = os.path.join(static_root, foto.ruta_archivo.lstrip('/'))
             if os.path.exists(ruta_completa):
-                os.remove(ruta_completa)
+                try:
+                    os.remove(ruta_completa)
+                except Exception as fs_err:
+                    current_app.logger.warning(f"No se pudo borrar archivo {ruta_completa}: {fs_err}")
 
         db.session.delete(reporte)
         db.session.commit()
