@@ -26,10 +26,12 @@ def get_upload_dir() -> str:
     os.makedirs(upload_dir, exist_ok=True)
     return upload_dir
 
+# -----------------------------------------------------------------------------
+# Crear reporte (con fotos opcionales)
+# -----------------------------------------------------------------------------
 @reportes_bp.route('/reportes', methods=['POST'])
 def crear_reporte():
     try:
-        # -------- Datos del formulario --------
         descripcion = request.form.get('descripcion')
         nombre_lugar = request.form.get('nombre_lugar', '')
         latitud = request.form.get('latitud')
@@ -38,7 +40,7 @@ def crear_reporte():
         if not descripcion:
             return jsonify({'error': 'La descripción es obligatoria'}), 400
 
-        # Coordenadas a float (si vienen)
+        # Coordenadas a float
         try:
             latitud = float(latitud) if latitud else None
             longitud = float(longitud) if longitud else None
@@ -46,17 +48,18 @@ def crear_reporte():
             latitud = None
             longitud = None
 
-        # -------- Crear reporte --------
+        # Crea el reporte (visible por defecto = False)
         nuevo_reporte = Reporte(
             descripcion=descripcion,
             nombre_lugar=nombre_lugar if nombre_lugar else None,
             latitud=latitud,
-            longitud=longitud
+            longitud=longitud,
+            visible=False
         )
         db.session.add(nuevo_reporte)
         db.session.commit()  # tener id y fecha_creacion
 
-        # -------- Fotos --------
+        # Manejo de fotos
         fotos_guardadas = []
         fotos_rechazadas = []
 
@@ -123,7 +126,7 @@ def crear_reporte():
 
         db.session.commit()
 
-        # -------- Email (no rompe si falla) --------
+        # Enviar email (no rompe si falla)
         try:
             email_service = EmailService()
             reporte_email_data = {
@@ -134,7 +137,6 @@ def crear_reporte():
                 'fecha_creacion': nuevo_reporte.fecha_creacion.isoformat() if nuevo_reporte.fecha_creacion else None
             }
 
-            # Rutas absolutas para adjuntos
             rutas_fotos = []
             if fotos_guardadas:
                 upload_dir = get_upload_dir()
@@ -153,7 +155,7 @@ def crear_reporte():
         except Exception as email_error:
             current_app.logger.error(f"Error al enviar email para reporte ID {nuevo_reporte.id}: {str(email_error)}")
 
-        # -------- Respuesta --------
+        # Respuesta
         reporte_dict = nuevo_reporte.to_dict()
         reporte_dict['fotos'] = fotos_guardadas
 
@@ -172,7 +174,9 @@ def crear_reporte():
         current_app.logger.error(f"Error al crear reporte: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
 
-
+# -----------------------------------------------------------------------------
+# Listar reportes paginados
+# -----------------------------------------------------------------------------
 @reportes_bp.route('/reportes', methods=['GET'])
 def obtener_reportes():
     try:
@@ -196,7 +200,9 @@ def obtener_reportes():
         current_app.logger.error(f"Error al obtener reportes: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
 
-
+# -----------------------------------------------------------------------------
+# Obtener un reporte
+# -----------------------------------------------------------------------------
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['GET'])
 def obtener_reporte(reporte_id):
     try:
@@ -206,7 +212,9 @@ def obtener_reporte(reporte_id):
         current_app.logger.error(f"Error al obtener reporte {reporte_id}: {str(e)}")
         return jsonify({'error': 'Error interno del servidor'}), 500
 
-
+# -----------------------------------------------------------------------------
+# Eliminar un reporte (y sus archivos físicos)
+# -----------------------------------------------------------------------------
 @reportes_bp.route('/reportes/<int:reporte_id>', methods=['DELETE'])
 def eliminar_reporte(reporte_id):
     try:
@@ -229,4 +237,40 @@ def eliminar_reporte(reporte_id):
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error al eliminar reporte {reporte_id}: {str(e)}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+# -----------------------------------------------------------------------------
+# NUEVO: Marcar visible / oculto
+# -----------------------------------------------------------------------------
+@reportes_bp.route('/reportes/<int:reporte_id>/visible', methods=['PATCH'])
+def set_visible(reporte_id):
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        v = bool(body.get('visible'))
+        r = Reporte.query.get_or_404(reporte_id)
+        r.visible = v
+        db.session.commit()
+        return jsonify({'ok': True, 'reporte': r.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error set_visible {reporte_id}: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+# -----------------------------------------------------------------------------
+# NUEVO: Lista de reportes visibles (para pintar en mapa)
+# -----------------------------------------------------------------------------
+@reportes_bp.route('/reportes/visibles', methods=['GET'])
+def list_visibles():
+    try:
+        q = (Reporte.query
+             .filter(Reporte.visible.is_(True),
+                     Reporte.latitud.isnot(None),
+                     Reporte.longitud.isnot(None))
+             .order_by(Reporte.fecha_creacion.desc())
+             .limit(200))
+        data = [r.to_dict() for r in q.all()]
+        # Para el mapa alcanzan los campos básicos, pero devolvemos to_dict completo
+        return jsonify({'ok': True, 'reportes': data}), 200
+    except Exception as e:
+        current_app.logger.error(f"Error list_visibles: {e}")
         return jsonify({'error': 'Error interno del servidor'}), 500
