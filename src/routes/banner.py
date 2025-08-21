@@ -1,53 +1,36 @@
 # src/routes/banner.py
 from flask import Blueprint, jsonify, request
-from src.models import db, BannerConfig
-from datetime import datetime
+from src.models import db                   # <- misma instancia
+from src.models.banner import BannerConfig  # <- modelo
 
 banner_bp = Blueprint("banner", __name__)
 
-# GET público
-@banner_bp.route("/api/banner", methods=["GET"])
-def get_banner():
-    banner = BannerConfig.query.get(1)
-    if not banner:
-        return jsonify({
-            "enabled": False,
-            "id": "1",
-            "text": "",
-            "variant": "info",
-            "link_text": "",
-            "link_href": "",
-            "updated_at": None
-        })
-    return jsonify(banner.to_dict())
+@banner_bp.route("/banner", methods=["GET"])
+def get_public_banner():
+    b = db.session.get(BannerConfig, 1)
+    if not b:
+        b = BannerConfig(id=1, enabled=False, text="", variant="info")
+        db.session.add(b); db.session.commit()
+    return jsonify(b.to_dict()), 200
 
-# PUT / PATCH privado (admin)
-@banner_bp.route("/api/admin/banner", methods=["PUT", "PATCH"])
-def update_banner():
-    data = request.get_json() or {}
-    banner = BannerConfig.query.get(1)
+@banner_bp.route("/admin/banner", methods=["GET", "PUT", "PATCH"])
+def admin_banner():
+    b = db.session.get(BannerConfig, 1)
+    if not b:
+        b = BannerConfig(id=1, enabled=False, text="", variant="info")
+        db.session.add(b); db.session.commit()
 
-    if not banner:
-        banner = BannerConfig(id=1)
+    if request.method == "GET":
+        return jsonify(b.to_dict()), 200
 
-    # Validación: si lo habilitás, debe tener texto
+    data = request.get_json(silent=True) or {}
     if data.get("enabled") and not str(data.get("text", "")).strip():
-        return jsonify({"error": "El texto es requerido cuando enabled=true"}), 400
+        return jsonify({"error": "text requerido cuando enabled=true"}), 400
 
-    # Solo actualizamos lo que venga en data
-    if "enabled" in data:
-        banner.enabled = bool(data["enabled"])
-    if "text" in data:
-        banner.text = data["text"]
-    if "variant" in data:
-        banner.variant = data["variant"]
-    if "link_text" in data:
-        banner.link_text = data["link_text"]
-    if "link_href" in data:
-        banner.link_href = data["link_href"]
-
-    banner.updated_at = datetime.utcnow()
-
-    db.session.add(banner)
+    if "enabled"   in data: b.enabled   = bool(data["enabled"])
+    if "text"      in data: b.text      = str(data["text"] or "")
+    if "variant"   in data: b.variant   = str(data["variant"] or "info").lower()
+    if "link_text" in data: b.link_text = str(data["link_text"] or "")
+    if "link_href" in data: b.link_href = str(data["link_href"] or "")
     db.session.commit()
-    return jsonify(banner.to_dict())
+    return jsonify(b.to_dict()), 200
