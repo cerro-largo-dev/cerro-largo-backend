@@ -1,3 +1,4 @@
+# src/routes/banner.py
 from flask import Blueprint, jsonify, request
 from src.models.banner import db, BannerConfig
 
@@ -8,22 +9,23 @@ def get_public_banner():
     b = db.session.get(BannerConfig, 1)
     if not b:
         b = BannerConfig(id=1, enabled=False, text="", variant="info")
-        db.session.add(b); db.session.commit()
+        db.session.add(b)
+        db.session.commit()
     return jsonify(b.to_dict()), 200
 
-# Si ya tenés auth admin, poné @login_required / verificación
 @banner_bp.route("/admin/banner", methods=["GET", "PUT", "PATCH"])
 def admin_banner():
+    # ⚠️ Si tienes auth de admin, ponla aquí
     b = db.session.get(BannerConfig, 1)
     if not b:
         b = BannerConfig(id=1, enabled=False, text="", variant="info")
-        db.session.add(b); db.session.commit()
+        db.session.add(b)
+        db.session.commit()
 
     if request.method == "GET":
         return jsonify(b.to_dict()), 200
 
     data = request.get_json(silent=True) or {}
-    # Campos editables
     if "enabled" in data: b.enabled = bool(data["enabled"])
     if "text" in data: b.text = str(data["text"] or "")
     if "variant" in data: b.variant = str(data["variant"] or "info").lower()
