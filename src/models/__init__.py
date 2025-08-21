@@ -1,16 +1,14 @@
-"""
-Inicializa la instancia de SQLAlchemy compartida por todos los modelos.
-
-Esta instancia debe importarse desde otros módulos para evitar crear
-múltiples instancias de SQLAlchemy y asegurar que esté asociada al
-objeto Flask correctamente.  En `main.py` se llama a
-`db.init_app(app)` una sola vez.
-"""
-
+# src/models/__init__.py
 from flask_sqlalchemy import SQLAlchemy
 
-# Instancia global de SQLAlchemy para toda la aplicación
+# ÚNICA instancia global de SQLAlchemy para toda la app
 db = SQLAlchemy()
+
+# Importá los modelos aquí (después de definir db) para registrarlos
+# OJO: todos los modelos deben importar "db" desde este módulo.
+from .banner import BannerConfig  # noqa: E402,F401
+# Si tenés más modelos: from .reporte import Reporte, FotoReporte, ...
+
 
 from .reporte import Reporte, FotoReporte
 
