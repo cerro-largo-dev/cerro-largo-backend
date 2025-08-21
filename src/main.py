@@ -1,4 +1,4 @@
-# main.py (PostgreSQL por ENV → fallback a SQLite, con STATIC_ROOT)
+# src/main.py  (POSTGRES por ENV → fallback a SQLite, con STATIC_ROOT y todos los blueprints)
 import os
 import sys
 from datetime import datetime
@@ -78,21 +78,17 @@ app.register_blueprint(report_bp,   url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
 app.register_blueprint(notify_bp,   url_prefix="/api/notify")
 app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")
-app.register_blueprint(banner_bp, url_prefix="/api")
+app.register_blueprint(banner_bp,   url_prefix="/api")
 
 # -----------------------------------------------------------------------------
 # Seed inicial de zonas (si la tabla está vacía)
 # -----------------------------------------------------------------------------
 DESIRED_ZONE_ORDER = [
-     'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
-'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
-'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
-'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
-'Melo (GCB)', 'Melo (GEB)'  'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
-'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
-'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
-'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
-'Melo (GCB)', 'Melo (GEB)'
+    'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
+    'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
+    'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
+    'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
+    'Melo (GCB)', 'Melo (GEB)'
 ]
 with app.app_context():
     db.create_all()
