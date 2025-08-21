@@ -17,6 +17,7 @@ from src.routes.report import report_bp
 from src.routes.reportes import reportes_bp
 from src.routes.notify import notify_bp
 from src.routes.inumet import inumet_bp
+from src.routes.banner import banner_bp
 
 # -----------------------------------------------------------------------------
 # Config básica
@@ -77,6 +78,7 @@ app.register_blueprint(report_bp,   url_prefix="/api/report")
 app.register_blueprint(reportes_bp, url_prefix="/api")
 app.register_blueprint(notify_bp,   url_prefix="/api/notify")
 app.register_blueprint(inumet_bp,   url_prefix="/api/inumet")
+app.register_blueprint(banner_bp, url_prefix="/api")
 
 # -----------------------------------------------------------------------------
 # Seed inicial de zonas (si la tabla está vacía)
