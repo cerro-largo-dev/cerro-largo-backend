@@ -1,7 +1,8 @@
-# main.py (PostgreSQL por ENV → fallback a SQLite, con STATIC_ROOT) — actualizado
+# main.py — completo (Redis opcional para rate-limit)
 import os
 import sys
 from datetime import datetime, timedelta
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -9,6 +10,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 # --- Rutas de import (raíz del proyecto) ---
+# Este archivo está en src/main.py; agregamos la carpeta raíz al sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # --- DB & Blueprints ---
@@ -27,13 +29,15 @@ from src.routes.banner import banner_bp
 # -----------------------------------------------------------------------------
 FRONTEND_ORIGIN = os.environ.get(
     "FRONTEND_ORIGIN",
-    "https://cerro-largo-frontend.onrender.com"
+    "https://cerro-largo-frontend.onrender.com",
 )
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")  # validado abajo en prod
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-DB_PATH = os.path.join(BASE_DIR, "database", "app.db")
+DB_DIR = os.path.join(BASE_DIR, "database")
+DB_PATH = os.path.join(DB_DIR, "app.db")
+os.makedirs(DB_DIR, exist_ok=True)
 
 # STATIC_ROOT real para subir/leer adjuntos (fotos de reportes)
 STATIC_ROOT = os.environ.get("STATIC_ROOT", os.path.join(BASE_DIR, "static"))
@@ -42,7 +46,7 @@ os.makedirs(os.path.join(STATIC_ROOT, "uploads", "reportes"), exist_ok=True)
 # -----------------------------------------------------------------------------
 # App & CORS
 # -----------------------------------------------------------------------------
-# IMPORTANTE: Ya NO usamos static_folder=None para que current_app.static_folder exista
+# IMPORTANTE: usamos static_folder=STATIC_ROOT para que current_app.static_folder exista
 app = Flask(__name__, static_folder=STATIC_ROOT)
 app.url_map.strict_slashes = False
 app.secret_key = SECRET_KEY
@@ -62,7 +66,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 CORS(
     app,
     supports_credentials=True,
-    resources={r"/api/*": {"origins": [FRONTEND_ORIGIN]}}
+    resources={r"/api/*": {"origins": [FRONTEND_ORIGIN]}},
 )
 
 # Headers de seguridad básicos
@@ -74,14 +78,22 @@ def _security_headers(resp):
     resp.headers.setdefault("Permissions-Policy", "geolocation=(), camera=()")
     return resp
 
-# Rate limiting (por IP)
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
+# -----------------------------------------------------------------------------
+# Rate limiting (por IP) — usa Redis si RATELIMIT_STORAGE_URI está definido
+# Ej: RATELIMIT_STORAGE_URI=redis://:<PASS>@<HOST>:<PORT>/0
+# Fallback dev: memory:// (no recomendado en producción)
+# -----------------------------------------------------------------------------
+RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    storage_uri=RATELIMIT_STORAGE_URI,
+    default_limits=["200 per minute"],
+)
 
 # -----------------------------------------------------------------------------
 # Base de datos (usa DATABASE_URL si existe; si no, SQLite local)
 # -----------------------------------------------------------------------------
-os.makedirs(os.path.join(BASE_DIR, "database"), exist_ok=True)
-
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 # Render a veces entrega postgres:// (SQLAlchemy requiere postgresql+psycopg2://)
 if DATABASE_URL.startswith("postgres://"):
@@ -113,11 +125,11 @@ app.register_blueprint(banner_bp,   url_prefix="/api")
 # Seed inicial de zonas (si la tabla está vacía)
 # -----------------------------------------------------------------------------
 DESIRED_ZONE_ORDER = [
-    'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
-    'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
-    'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
-    'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
-    'Melo (GCB)', 'Melo (GEB)'
+    "ACEGUÁ", "ARBOLITO", "ARÉVALO", "BAÑADO DE MEDINA", "CENTURIÓN",
+    "CERRO DE LAS CUENTAS", "FRAILE MUERTO", "ISIDORO NOBLÍA", "LAGUNA MERÍN",
+    "LAS CAÑAS", "PLÁCIDO ROSAS", "QUEBRACHO", "RAMÓN TRIGO", "RÍO BRANCO",
+    "TRES ISLAS", "TUPAMBAÉ", "Melo (GBA)", "Melo (GBB)", "Melo (GBC)",
+    "Melo (GCB)", "Melo (GEB)",
 ]
 with app.app_context():
     db.create_all()
@@ -144,6 +156,7 @@ with app.app_context():
 def api_health():
     return jsonify({"ok": True, "service": "backend"}), 200
 
+
 @app.get("/api/healthz")
 @limiter.exempt
 def api_healthz():
@@ -156,6 +169,7 @@ def api_healthz():
 @limiter.exempt
 def root():
     return jsonify({"message": "Backend API activo"}), 200
+
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
@@ -173,11 +187,13 @@ def _not_found(e):
         return jsonify({"ok": False, "error": "not found", "path": request.path}), 404
     return e, 404
 
+
 @app.errorhandler(405)
 def _method_not_allowed(e):
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": "method not allowed", "path": request.path}), 405
     return e, 405
+
 
 @app.errorhandler(Exception)
 def handle_exception(e):
