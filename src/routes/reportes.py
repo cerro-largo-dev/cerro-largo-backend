@@ -1,16 +1,21 @@
-# src/routes/reportes.py
+# src/routes/reportes.py — actualizado (recompresión a WEBP + validaciones)
 import os
+import io
 import uuid
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
+from PIL import Image, UnidentifiedImageError
+
 from src.models.reporte import db, Reporte, FotoReporte
 from src.utils.email_service import EmailService
 
 reportes_bp = Blueprint('reportes', __name__)
 
 # ---- Configuración de subida ----
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif'}
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+# Restringimos a formatos estándar y recomprimimos a WEBP (sin EXIF)
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+# 8 MB para alinear con app.config['MAX_CONTENT_LENGTH'] en main.py
+MAX_FILE_SIZE = 8 * 1024 * 1024  # 8MB
 
 def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -71,19 +76,7 @@ def crear_reporte():
                 if not (foto and foto.filename):
                     continue
 
-                # Tamaño
-                foto.seek(0, os.SEEK_END)
-                file_size = foto.tell()
-                foto.seek(0)
-
-                if file_size > MAX_FILE_SIZE:
-                    fotos_rechazadas.append({
-                        'nombre': foto.filename,
-                        'razon': f'Archivo demasiado grande ({file_size/(1024*1024):.1f}MB). '
-                                 f'Máximo permitido: {MAX_FILE_SIZE/(1024*1024):.1f}MB'
-                    })
-                    continue
-
+                # 1) Validar extensión declarada
                 if not allowed_file(foto.filename):
                     fotos_rechazadas.append({
                         'nombre': foto.filename,
@@ -91,38 +84,66 @@ def crear_reporte():
                     })
                     continue
 
+                # 2) Leer contenido y validar tamaño real
                 try:
-                    # Nombre único y seguro
-                    extension = foto.filename.rsplit('.', 1)[1].lower()
-                    nombre_unico = f"{uuid.uuid4().hex}.{extension}"
-                    nombre_seguro = secure_filename(nombre_unico)
+                    raw = foto.read()
+                except Exception as read_err:
+                    fotos_rechazadas.append({'nombre': foto.filename, 'razon': f'No se pudo leer el archivo: {read_err}'})
+                    continue
 
-                    # Guardar
-                    ruta_archivo_abs = os.path.join(upload_dir, nombre_seguro)
-                    foto.save(ruta_archivo_abs)
-
-                    if not os.path.exists(ruta_archivo_abs):
-                        fotos_rechazadas.append({
-                            'nombre': foto.filename,
-                            'razon': 'Error al guardar el archivo en el servidor'
-                        })
-                        continue
-
-                    # Registro DB (ruta pública relativa a /static)
-                    foto_reporte = FotoReporte(
-                        reporte_id=nuevo_reporte.id,
-                        nombre_archivo=foto.filename,
-                        ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
-                    )
-                    db.session.add(foto_reporte)
-                    fotos_guardadas.append(foto_reporte.to_dict())
-
-                except Exception as foto_error:
-                    current_app.logger.error(f"Error al procesar foto {foto.filename}: {str(foto_error)}")
+                file_size = len(raw)
+                # Chequeo contra límite local y el global de Flask
+                max_len = min(MAX_FILE_SIZE, int(current_app.config.get('MAX_CONTENT_LENGTH', MAX_FILE_SIZE)))
+                if file_size > max_len:
                     fotos_rechazadas.append({
                         'nombre': foto.filename,
-                        'razon': f'Error al procesar el archivo: {str(foto_error)}'
+                        'razon': f'Archivo demasiado grande ({file_size/(1024*1024):.1f}MB). '
+                                 f'Máximo permitido: {max_len/(1024*1024):.1f}MB'
                     })
+                    continue
+
+                # 3) Validar que realmente sea una imagen y recomprimir a WEBP (quita EXIF)
+                try:
+                    img = Image.open(io.BytesIO(raw))
+                    # Si quisieras verificar antes: img.verify(); pero requiere reabrir. Vamos directo a convertir.
+                    img = img.convert("RGB")  # normalizamos y removemos alfa si la hubiera
+                except UnidentifiedImageError:
+                    fotos_rechazadas.append({'nombre': foto.filename, 'razon': 'Archivo no es una imagen válida'})
+                    continue
+                except Exception as id_err:
+                    fotos_rechazadas.append({'nombre': foto.filename, 'razon': f'No se pudo procesar la imagen: {id_err}'})
+                    continue
+
+                # 4) Salida WEBP
+                out = io.BytesIO()
+                try:
+                    img.save(out, format="WEBP", quality=80, method=6)  # sin metadatos/EXIF
+                except Exception as enc_err:
+                    fotos_rechazadas.append({'nombre': foto.filename, 'razon': f'Fallo al recomprimir: {enc_err}'})
+                    continue
+                out.seek(0)
+
+                # 5) Guardar a disco con nombre único y extensión .webp
+                nombre_unico = f"{uuid.uuid4().hex}.webp"
+                nombre_seguro = secure_filename(nombre_unico)
+                ruta_archivo_abs = os.path.join(upload_dir, nombre_seguro)
+
+                try:
+                    with open(ruta_archivo_abs, "wb") as f:
+                        f.write(out.read())
+                except Exception as write_err:
+                    fotos_rechazadas.append({'nombre': foto.filename, 'razon': f'Error al guardar: {write_err}'})
+                    continue
+
+                # 6) Registrar en DB (ruta pública relativa a /static)
+                foto_reporte = FotoReporte(
+                    reporte_id=nuevo_reporte.id,
+                    # Guardamos el nombre original como referencia; el archivo físico es .webp
+                    nombre_archivo=foto.filename,
+                    ruta_archivo=f"/uploads/reportes/{nombre_seguro}"
+                )
+                db.session.add(foto_reporte)
+                fotos_guardadas.append(foto_reporte.to_dict())
 
         db.session.commit()
 
@@ -141,7 +162,10 @@ def crear_reporte():
             if fotos_guardadas:
                 upload_dir = get_upload_dir()
                 for foto in fotos_guardadas:
-                    nombre_archivo = foto['ruta_archivo'].split('/')[-1]
+                    # FotoReporte.to_dict() debe incluir ruta_archivo (ej: /uploads/reportes/<uuid>.webp)
+                    nombre_archivo = foto.get('ruta_archivo', '').split('/')[-1]
+                    if not nombre_archivo:
+                        continue
                     ruta_completa = os.path.join(upload_dir, nombre_archivo)
                     if os.path.exists(ruta_completa):
                         rutas_fotos.append(ruta_completa)
