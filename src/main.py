@@ -1,9 +1,12 @@
-# src/main.py  (POSTGRES por ENV → fallback a SQLite, con STATIC_ROOT y todos los blueprints)
+# main.py (PostgreSQL por ENV → fallback a SQLite, con STATIC_ROOT) — actualizado
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # --- Rutas de import (raíz del proyecto) ---
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -27,6 +30,7 @@ FRONTEND_ORIGIN = os.environ.get(
     "https://cerro-largo-frontend.onrender.com"
 )
 SECRET_KEY = os.environ.get("SECRET_KEY", "change-this-secret")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")  # validado abajo en prod
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DB_PATH = os.path.join(BASE_DIR, "database", "app.db")
@@ -46,7 +50,32 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="None",
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    MAX_CONTENT_LENGTH=8 * 1024 * 1024,  # 8 MB uploads
+    JSON_SORT_KEYS=False,
 )
+
+# Respeta IP/Proto detrás de proxy (Render/NGINX)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
+# CORS sólo para /api/*
+CORS(
+    app,
+    supports_credentials=True,
+    resources={r"/api/*": {"origins": [FRONTEND_ORIGIN]}}
+)
+
+# Headers de seguridad básicos
+@app.after_request
+def _security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("Permissions-Policy", "geolocation=(), camera=()")
+    return resp
+
+# Rate limiting (por IP)
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
 # -----------------------------------------------------------------------------
 # Base de datos (usa DATABASE_URL si existe; si no, SQLite local)
@@ -62,12 +91,12 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
-# CORS sólo para /api/*
-CORS(
-    app,
-    supports_credentials=True,
-    resources={r"/api/*": {"origins": [FRONTEND_ORIGIN]}}
-)
+# En producción: exigir SECRET_KEY fuerte y ADMIN_PASSWORD definido/no por defecto
+if os.getenv("FLASK_ENV") == "production":
+    if SECRET_KEY == "change-this-secret":
+        raise ValueError("SECRET_KEY environment variable is required in production")
+    if (ADMIN_PASSWORD is None) or (ADMIN_PASSWORD.strip() == "") or (ADMIN_PASSWORD == "cerrolargo2025"):
+        raise ValueError("ADMIN_PASSWORD environment variable is required for security in production")
 
 # -----------------------------------------------------------------------------
 # Blueprints
@@ -111,10 +140,12 @@ with app.app_context():
 # Health
 # -----------------------------------------------------------------------------
 @app.get("/api/health")
+@limiter.exempt
 def api_health():
     return jsonify({"ok": True, "service": "backend"}), 200
 
 @app.get("/api/healthz")
+@limiter.exempt
 def api_healthz():
     return jsonify({"ok": True, "service": "backend"}), 200
 
@@ -122,6 +153,7 @@ def api_healthz():
 # Raíz y catch-all
 # -----------------------------------------------------------------------------
 @app.get("/")
+@limiter.exempt
 def root():
     return jsonify({"message": "Backend API activo"}), 200
 
