@@ -9,10 +9,7 @@ import pathlib
 admin_bp = Blueprint('admin', __name__)
 
 # ---------------- Config ----------------
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
-if not ADMIN_PASSWORD:
-    raise ValueError("ADMIN_PASSWORD environment variable is required for security")
-
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "cerrolargo2025")
 SESSION_FLAG = "admin_authenticated"  # coherente con tu cookie histórica
 
 # JSON de editores por zona: {"AREVALO":"passarevalo","MELO":"passmelo"}
