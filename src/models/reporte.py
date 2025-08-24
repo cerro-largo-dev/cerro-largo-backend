@@ -22,11 +22,11 @@ class Reporte(db.Model):
     longitud = db.Column(db.Float, nullable=True)
 
     # Fechas en UTC (serializadas con sufijo 'Z' en to_dict)
-    fecha_creacion = db.Column(db.DateTime(timezone=True),
-                               default=lambda: datetime.now(timezone.utc))
+   fecha_creacion = db.Column(db.DateTime(timezone=True), index=True,
+                                default=lambda: datetime.now(timezone.utc))
 
     # NUEVO: flag de visibilidad para mostrar/ocultar en el mapa
-    visible = db.Column(db.Boolean, nullable=False, default=False)
+    visible = db.Column(db.Boolean, nullable=False, default=False, index=True)
 
     # Fotos relacionadas
     fotos = db.relationship(
