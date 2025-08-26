@@ -1,190 +1,248 @@
 # src/routes/admin.py
-from __future__ import annotations
-
-import json
+from flask import Blueprint, request, jsonify, session
+from src.models.zone_state import ZoneState, db
+from functools import wraps
 import os
+import json
+import unicodedata
 import pathlib
 import re
-from functools import wraps
-from typing import Any, Dict
 
-from flask import Blueprint, jsonify, request, session
+admin_bp = Blueprint('admin', __name__)
 
-admin_bp = Blueprint("admin", __name__)
+# ---------------- Config (ENV) ----------------
+# Requiere que esté definida en el entorno. No hay fallback inseguro.
+ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 
-# -------------------------------------------------------------------
-# Configuración
-# -------------------------------------------------------------------
+# Nombre de la cookie/flag de sesión
+SESSION_FLAG = os.environ.get("SESSION_FLAG", "admin_authenticated")
 
-# 1) ADMIN_PASSWORD: no rompemos el arranque si falta, pero el login admin quedará deshabilitado
-ADMIN_PASSWORD: str | None = os.environ.get("ADMIN_PASSWORD")  # <- ¡DEBES setearla en prod!
+# JSON con editores por zona (lo manejas en tu entorno): {"AREVALO":"<secreto>","MELO":"<secreto>"}
+ZONE_EDITORS_JSON = os.environ.get("ZONE_EDITORS_JSON", "")
 
-# 2) Banner: archivo donde se persiste la config pública del banner
-BANNER_STORE_PATH: str = os.environ.get("BANNER_STORE_PATH", "storage/banner.json")
-
-# 3) Sesión: flags/roles
-SESSION_FLAG = "admin_authenticated"      # bool
-SESSION_ROLE = "role"                     # 'admin' | 'editor'
-SESSION_ALLOWED_ZONES = "allowed_zones"   # '*' | [..]
-
-# 4) Validaciones de banner
-_ALLOWED_VARIANTS = {"info", "warn", "alert", "success"}
-_URL_RE = re.compile(r"^https?://", re.I)
-
-_DEFAULT_BANNER: Dict[str, Any] = {
+# Banner (persistencia simple en archivo)
+BANNER_STORE_PATH = os.environ.get("BANNER_STORE_PATH", "/tmp/banner.json")
+_DEFAULT_BANNER = {
     "enabled": False,
     "text": "",
-    "variant": "info",
+    "variant": "info",     # info | warn | alert | success
     "link_text": "",
     "link_href": "",
-    "id": "1",
+    "id": ""
 }
 
-# -------------------------------------------------------------------
-# Helpers comunes
-# -------------------------------------------------------------------
+# Variantes permitidas y validador de URL
+ALLOWED_BANNER_VARIANTS = {"info", "warn", "alert", "success"}
+_URL_RE = re.compile(r"^https?://", re.I)
 
-def _ensure_storage_dir():
-    p = pathlib.Path(BANNER_STORE_PATH).parent
-    if not p.exists():
-        p.mkdir(parents=True, exist_ok=True)
+# ---------------- Utils ----------------
+def _strip_accents(s: str) -> str:
+    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
-def _load_banner_cfg() -> Dict[str, Any]:
-    p = pathlib.Path(BANNER_STORE_PATH)
-    if p.exists():
+def canon(s: str) -> str:
+    if not s:
+        return ''
+    return _strip_accents(s).upper().strip()
+
+def load_zone_editors():
+    mapping = {}
+    if ZONE_EDITORS_JSON:
         try:
-            data = json.loads(p.read_text(encoding="utf-8") or "{}")
-            cfg = {**_DEFAULT_BANNER, **(data or {})}
-            cfg["enabled"] = bool(cfg.get("enabled", False))
-            cfg["text"] = str(cfg.get("text") or "")
-            cfg["variant"] = str(cfg.get("variant") or "info").lower()
-            cfg["link_text"] = str(cfg.get("link_text") or "")
-            cfg["link_href"] = str(cfg.get("link_href") or "")
-            cfg["id"] = str(cfg.get("id") or "1")
-            if cfg["variant"] not in _ALLOWED_VARIANTS:
-                cfg["variant"] = "info"
-            if cfg["link_href"] and not _URL_RE.match(cfg["link_href"]):
-                # Sanitizar si quedó algo raro en disco
-                cfg["link_href"] = ""
-            return cfg
+            env_map = json.loads(ZONE_EDITORS_JSON)
+            for k, v in (env_map or {}).items():
+                if v:
+                    mapping[canon(k)] = str(v)
         except Exception:
-            return dict(_DEFAULT_BANNER)
+            pass
+    return mapping
+
+ZONE_EDITORS = load_zone_editors()  # {'AREVALO':'<secreto>', ...}
+
+# ---------------- Banner helpers ----------------
+def _load_banner_cfg():
+    try:
+        p = pathlib.Path(BANNER_STORE_PATH)
+        if p.exists():
+            data = json.loads(p.read_text(encoding='utf-8') or '{}')
+            cfg = { **_DEFAULT_BANNER, **(data or {}) }
+            # saneo/normalización
+            cfg["enabled"]   = bool(cfg.get("enabled", False))
+            cfg["text"]      = str(cfg.get("text", ""))
+            v                = str(cfg.get("variant", "info")).lower().strip()
+            cfg["variant"]   = v if v in ALLOWED_BANNER_VARIANTS else "info"
+            cfg["link_text"] = str(cfg.get("link_text", ""))
+            href             = str(cfg.get("link_href", ""))
+            cfg["link_href"] = href if (not href or _URL_RE.match(href)) else ""
+            cfg["id"]        = str(cfg.get("id", ""))
+            # si no hay texto, deshabilitar
+            if not cfg["text"].strip():
+                cfg["enabled"] = False
+            return cfg
+    except Exception:
+        pass
     return dict(_DEFAULT_BANNER)
 
-def _save_banner_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    _ensure_storage_dir()
-    # Validación mínima antes de persistir
-    cfg = {**_DEFAULT_BANNER, **(cfg or {})}
-    cfg["enabled"] = bool(cfg.get("enabled", False))
-    cfg["text"] = str(cfg.get("text") or "")
-    variant = str(cfg.get("variant") or "info").lower()
-    cfg["variant"] = variant if variant in _ALLOWED_VARIANTS else "info"
-    cfg["link_text"] = str(cfg.get("link_text") or "")
-    link = str(cfg.get("link_href") or "")
-    if link and not _URL_RE.match(link):
-        raise ValueError("link_href inválido (debe comenzar con http:// o https://)")
-    cfg["link_href"] = link
-    cfg["id"] = str(cfg.get("id") or "1")
+def _save_banner_cfg(cfg: dict):
+    clean = { **_DEFAULT_BANNER, **(cfg or {}) }
+    # validar aquí también
+    clean["enabled"] = bool(clean.get("enabled", False))
+    clean["text"] = str(clean.get("text", ""))
+    v = str(clean.get("variant", "info")).lower().strip()
+    clean["variant"] = v if v in ALLOWED_BANNER_VARIANTS else "info"
+    clean["link_text"] = str(clean.get("link_text", ""))
+    href = str(clean.get("link_href", ""))
+    clean["link_href"] = href if (not href or _URL_RE.match(href)) else ""
+    clean["id"] = str(clean.get("id", ""))
 
-    pathlib.Path(BANNER_STORE_PATH).write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
-    return cfg
+    if not clean["text"].strip():
+        clean["enabled"] = False
 
-def _is_authenticated_admin() -> bool:
-    return bool(session.get(SESSION_FLAG)) and session.get(SESSION_ROLE) == "admin"
+    p = pathlib.Path(BANNER_STORE_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(clean, ensure_ascii=False, separators=(",", ":")), encoding='utf-8')
+    return clean
 
-def require_admin_auth(fn):
-    """Protege endpoints solo-admin."""
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not _is_authenticated_admin():
-            return jsonify({"success": False, "message": "No autorizado"}), 401
-        return fn(*args, **kwargs)
-    return wrapper
+# ---------------- Decoradores ----------------
+def require_admin_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get(SESSION_FLAG, False):
+            return jsonify({"success": False, "message": "Acceso no autorizado"}), 401
+        return f(*args, **kwargs)
+    return decorated
 
-# -------------------------------------------------------------------
-# Auth del ADMIN (independiente del zone-editor que ya tienes resuelto)
-# -------------------------------------------------------------------
-
-@admin_bp.post("/admin/login")
+# ---------------- Auth ----------------
+@admin_bp.route('/login', methods=['POST'])
 def admin_login():
-    """
-    Login de administrador:
-    - Espera JSON {"password": "..."}
-    - Requiere que ADMIN_PASSWORD esté seteada en el entorno
-    """
     data = request.get_json(silent=True) or {}
-    pwd = str(data.get("password") or "")
+    pwd = str(data.get('password') or '')
 
-    if not ADMIN_PASSWORD:
-        # No crasheamos la app, pero avisamos claramente
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "message": "ADMIN_PASSWORD no configurada en el entorno; login de administrador deshabilitado",
-                }
-            ),
-            500,
-        )
-
-    if pwd and pwd == ADMIN_PASSWORD:
-        # Seteamos sesión admin
+    # 1) Admin total
+    if pwd == ADMIN_PASSWORD:
         session[SESSION_FLAG] = True
-        session[SESSION_ROLE] = "admin"
-        session[SESSION_ALLOWED_ZONES] = "*"  # el admin ve/edita todo
-        return jsonify({"success": True, "message": "Autenticación OK"}), 200
+        session['role'] = 'admin'
+        session['allowed_zones'] = '*'
+        return jsonify({"success": True, "message": "Autenticación admin"}), 200
+
+    # 2) Editor por zona (si coincide secreto de zona)
+    zones = [z for z, passw in ZONE_EDITORS.items() if passw == pwd]
+    if zones:
+        session[SESSION_FLAG] = True
+        session['role'] = 'editor'
+        session['allowed_zones'] = zones  # canónicas
+        return jsonify({"success": True, "message": "Autenticación editor", "allowed_zones": zones}), 200
 
     return jsonify({"success": False, "message": "Contraseña incorrecta"}), 401
 
-
-@admin_bp.post("/admin/logout")
+@admin_bp.route('/logout', methods=['POST'])
 def admin_logout():
     session.pop(SESSION_FLAG, None)
-    session.pop(SESSION_ROLE, None)
-    session.pop(SESSION_ALLOWED_ZONES, None)
-    return jsonify({"success": True}), 200
+    session.pop('role', None)
+    session.pop('allowed_zones', None)
+    return jsonify({"success": True, "message": "Sesión cerrada"}), 200
 
+@admin_bp.route('/check-auth', methods=['GET'])
+def check_auth():
+    authed = session.get(SESSION_FLAG, False)
+    role = session.get('role', 'admin' if authed else None)
+    az = session.get('allowed_zones', '*' if role == 'admin' else [])
+    return jsonify({"success": True, "authenticated": bool(authed), "role": role, "allowed_zones": az}), 200
 
-@admin_bp.get("/admin/me")
-def admin_me():
-    """Estado de sesión (no revela mapeos de zonas)."""
-    is_admin = _is_authenticated_admin()
-    role = session.get(SESSION_ROLE) if is_admin else None
-    return jsonify({"authenticated": is_admin, "role": role}), 200
+# ---------------- Zonas ----------------
+@admin_bp.route('/zones/states', methods=['GET'])
+def get_zone_states():
+    """Público (si querés, podés protegerlo agregando @require_admin_auth)."""
+    try:
+        states = ZoneState.get_all_states()  # { name: { state, ... }, ... }
+        return jsonify({"success": True, "states": states}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Error al obtener estados: {str(e)}"}), 500
 
-# -------------------------------------------------------------------
-# Banner público (GET) y edición (POST) solo-admin
-# -------------------------------------------------------------------
+@admin_bp.route('/zones/update-state', methods=['POST'])
+@require_admin_auth
+def update_zone_state():
+    try:
+        data = request.get_json(silent=True) or {}
+        zone_name = data.get('zone_name')
+        state = (data.get('state') or '').strip().lower()
+        if not zone_name or state not in ['green', 'yellow', 'red']:
+            return jsonify({"success": False, "message": "Datos inválidos"}), 400
 
-@admin_bp.get("/banner")
+        # Autorización por zona si es editor
+        az = session.get('allowed_zones')
+        if az != '*' and az is not None:
+            if canon(zone_name) not in [canon(z) for z in (az or [])]:
+                return jsonify({"success": False, "message": "No autorizado para esta zona"}), 403
+
+        updated_zone = ZoneState.update_zone_state(zone_name, state, session.get('role', 'admin'))
+        if updated_zone:
+            return jsonify({
+                "success": True,
+                "message": "Estado actualizado correctamente",
+                "zone": updated_zone.to_dict()
+            }), 200
+        else:
+            return jsonify({"success": False, "message": "Error al actualizar o crear la zona"}), 500
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Error al actualizar estado: {str(e)}"}), 500
+
+@admin_bp.route('/zones/bulk-update', methods=['POST'])
+@require_admin_auth
+def bulk_update_zones():
+    try:
+        data = request.get_json(silent=True) or {}
+        updates = data.get('updates', [])
+        if not isinstance(updates, list) or not updates:
+            return jsonify({"success": False, "message": "No se proporcionaron actualizaciones"}), 400
+
+        az = session.get('allowed_zones')
+        updated = []
+        for upd in updates:
+            zn = upd.get('zone_name')
+            st = (upd.get('state') or '').strip().lower()
+            if not zn or st not in ['green', 'yellow', 'red']:
+                continue
+            if az != '*' and az is not None and canon(zn) not in [canon(z) for z in (az or [])]:
+                continue  # skip zonas no permitidas
+            z = ZoneState.update_zone_state(zn, st, session.get('role', 'editor'))
+            if z:
+                updated.append(z.to_dict())
+
+        return jsonify({"success": True, "message": f"Se actualizaron {len(updated)} zonas", "updated_zones": updated}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Error en actualización masiva: {str(e)}"}), 500
+
+# ---------------- Banner ----------------
+# GET (público): SiteBanner lo usa para leer el contenido
+@admin_bp.route('/banner', methods=['GET'])
 def public_get_banner():
-    """
-    Público: devuelve la configuración de banner para el frontend.
-    Si registras este blueprint con url_prefix='/api', la ruta pública será: GET /api/banner
-    """
-    return jsonify(_load_banner_cfg()), 200
+    cfg = _load_banner_cfg()
+    return jsonify(cfg), 200
 
-
-@admin_bp.post("/admin/banner")
+# POST (solo admin): guardar configuración del banner
+@admin_bp.route('/banner', methods=['POST'])
 @require_admin_auth
 def set_banner():
-    """
-    Solo admin: actualiza el banner.
-    Body JSON esperado (todos opcionales):
-    {
-      "enabled": bool,
-      "text": str,
-      "variant": "info"|"warn"|"alert"|"success",
-      "link_text": str,
-      "link_href": "https://...",
-      "id": str
-    }
-    """
+    if session.get('role') != 'admin':
+        return jsonify({"success": False, "message": "Solo admin puede modificar el banner"}), 403
     data = request.get_json(silent=True) or {}
-    try:
-        saved = _save_banner_cfg(data)
-        return jsonify({"success": True, "banner": saved}), 200
-    except ValueError as e:
-        return jsonify({"success": False, "message": str(e)}), 400
-    except Exception:
-        return jsonify({"success": False, "message": "Error guardando banner"}), 500
+
+    variant = str(data.get('variant') or 'info').lower().strip()
+    if variant not in ALLOWED_BANNER_VARIANTS:
+        variant = 'info'
+
+    link_href = str(data.get('link_href') or '')
+    if link_href and not _URL_RE.match(link_href):
+        return jsonify({"success": False, "message": "link_href inválido (requiere http/https)"}), 400
+
+    new_cfg = {
+        "enabled": bool(data.get('enabled', False)),
+        "text": str(data.get('text') or ''),
+        "variant": variant,
+        "link_text": str(data.get('link_text') or ''),
+        "link_href": link_href,
+        "id": str(data.get('id') or '')
+    }
+    saved = _save_banner_cfg(new_cfg)
+    return jsonify({"success": True, "banner": saved}), 200
+
