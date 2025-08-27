@@ -8,7 +8,7 @@ import unicodedata
 import pathlib
 import re
 
-admin_bp = Blueprint('admin', __name__)
+admin_bp = Blueprint("admin", __name__)
 
 # ---------------- Config (ENV) ----------------
 # Requiere que esté definida en el entorno. No hay fallback inseguro.
@@ -37,11 +37,11 @@ _URL_RE = re.compile(r"^https?://", re.I)
 
 # ---------------- Utils ----------------
 def _strip_accents(s: str) -> str:
-    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 def canon(s: str) -> str:
     if not s:
-        return ''
+        return ""
     return _strip_accents(s).upper().strip()
 
 def load_zone_editors():
@@ -56,14 +56,14 @@ def load_zone_editors():
             pass
     return mapping
 
-ZONE_EDITORS = load_zone_editors()  # {'AREVALO':'<secreto>', ...}
+ZONE_EDITORS = load_zone_editors()  # {"AREVALO":"<secreto>", ...}
 
 # ---------------- Banner helpers ----------------
 def _load_banner_cfg():
     try:
         p = pathlib.Path(BANNER_STORE_PATH)
         if p.exists():
-            data = json.loads(p.read_text(encoding='utf-8') or '{}')
+            data = json.loads(p.read_text(encoding="utf-8") or "{}")
             cfg = { **_DEFAULT_BANNER, **(data or {}) }
             # saneo/normalización
             cfg["enabled"]   = bool(cfg.get("enabled", False))
@@ -99,7 +99,7 @@ def _save_banner_cfg(cfg: dict):
 
     p = pathlib.Path(BANNER_STORE_PATH)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(clean, ensure_ascii=False, separators=(",", ":")), encoding='utf-8')
+    p.write_text(json.dumps(clean, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return clean
 
 # ---------------- Decoradores ----------------
@@ -112,69 +112,71 @@ def require_admin_auth(f):
     return decorated
 
 # ---------------- Auth ----------------
-@admin_bp.route('/login', methods=['POST'])
+@admin_bp.route("/login", methods=["POST"])
 def admin_login():
     data = request.get_json(silent=True) or {}
-    pwd = str(data.get('password') or '')
+    pwd = str(data.get("password") or "")
 
     # 1) Admin total
     if pwd == ADMIN_PASSWORD:
         session[SESSION_FLAG] = True
-        session['role'] = 'admin'
-        session['allowed_zones'] = '*'
+        session["role"] = "admin"
+        session["allowed_zones"] = "*"
         return jsonify({"success": True, "message": "Autenticación admin"}), 200
 
     # 2) Editor por zona (si coincide secreto de zona)
     zones = [z for z, passw in ZONE_EDITORS.items() if passw == pwd]
     if zones:
         session[SESSION_FLAG] = True
-        session['role'] = 'editor'
-        session['allowed_zones'] = zones  # canónicas
+        session["role"] = "editor"
+        session["allowed_zones"] = zones  # canónicas
         return jsonify({"success": True, "message": "Autenticación editor", "allowed_zones": zones}), 200
 
     return jsonify({"success": False, "message": "Contraseña incorrecta"}), 401
 
-@admin_bp.route('/logout', methods=['POST'])
+@admin_bp.route("/logout", methods=["POST"])
 def admin_logout():
     session.pop(SESSION_FLAG, None)
-    session.pop('role', None)
-    session.pop('allowed_zones', None)
+    session.pop("role", None)
+    session.pop("allowed_zones", None)
     return jsonify({"success": True, "message": "Sesión cerrada"}), 200
 
-@admin_bp.route('/check-auth', methods=['GET'])
+@admin_bp.route("/check-auth", methods=["GET"])
 def check_auth():
     authed = session.get(SESSION_FLAG, False)
-    role = session.get('role', 'admin' if authed else None)
-    az = session.get('allowed_zones', '*' if role == 'admin' else [])
+    role = session.get("role", "admin" if authed else None)
+    az = session.get("allowed_zones", "*" if role == "admin" else [])
     return jsonify({"success": True, "authenticated": bool(authed), "role": role, "allowed_zones": az}), 200
 
 # ---------------- Zonas ----------------
-@admin_bp.route('/zones/states', methods=['GET'])
+@admin_bp.route("/zones/states", methods=["GET"])
 def get_zone_states():
     """Público (si querés, podés protegerlo agregando @require_admin_auth)."""
     try:
         states = ZoneState.get_all_states()  # { name: { state, ... }, ... }
+        print(f"Estados obtenidos: {states}") # Added print statement
         return jsonify({"success": True, "states": states}), 200
     except Exception as e:
+        print(f"Error en get_zone_states: {e}") # Added print statement
         return jsonify({"success": False, "message": f"Error al obtener estados: {str(e)}"}), 500
 
-@admin_bp.route('/zones/update-state', methods=['POST'])
+@admin_bp.route("/zones/update-state", methods=["POST"])
 @require_admin_auth
 def update_zone_state():
     try:
         data = request.get_json(silent=True) or {}
-        zone_name = data.get('zone_name')
-        state = (data.get('state') or '').strip().lower()
-        if not zone_name or state not in ['green', 'yellow', 'red']:
+        zone_name = data.get("zone_name")
+        state = (data.get("state") or "").strip().lower()
+        if not zone_name or state not in ["green", "yellow", "red"]:
             return jsonify({"success": False, "message": "Datos inválidos"}), 400
 
         # Autorización por zona si es editor
-        az = session.get('allowed_zones')
-        if az != '*' and az is not None:
+        az = session.get("allowed_zones")
+        if az != "*" and az is not None:
             if canon(zone_name) not in [canon(z) for z in (az or [])]:
                 return jsonify({"success": False, "message": "No autorizado para esta zona"}), 403
 
-        updated_zone = ZoneState.update_zone_state(zone_name, state, session.get('role', 'admin'))
+        updated_zone = ZoneState.update_zone_state(zone_name, state, session.get("role", "admin"))
         if updated_zone:
             return jsonify({
                 "success": True,
@@ -186,25 +188,25 @@ def update_zone_state():
     except Exception as e:
         return jsonify({"success": False, "message": f"Error al actualizar estado: {str(e)}"}), 500
 
-@admin_bp.route('/zones/bulk-update', methods=['POST'])
+@admin_bp.route("/zones/bulk-update", methods=["POST"])
 @require_admin_auth
 def bulk_update_zones():
     try:
         data = request.get_json(silent=True) or {}
-        updates = data.get('updates', [])
+        updates = data.get("updates", [])
         if not isinstance(updates, list) or not updates:
             return jsonify({"success": False, "message": "No se proporcionaron actualizaciones"}), 400
 
-        az = session.get('allowed_zones')
+        az = session.get("allowed_zones")
         updated = []
         for upd in updates:
-            zn = upd.get('zone_name')
-            st = (upd.get('state') or '').strip().lower()
-            if not zn or st not in ['green', 'yellow', 'red']:
+            zn = upd.get("zone_name")
+            st = (upd.get("state") or "").strip().lower()
+            if not zn or st not in ["green", "yellow", "red"]:
                 continue
-            if az != '*' and az is not None and canon(zn) not in [canon(z) for z in (az or [])]:
+            if az != "*" and az is not None and canon(zn) not in [canon(z) for z in (az or [])]:
                 continue  # skip zonas no permitidas
-            z = ZoneState.update_zone_state(zn, st, session.get('role', 'editor'))
+            z = ZoneState.update_zone_state(zn, st, session.get("role", "editor"))
             if z:
                 updated.append(z.to_dict())
 
@@ -214,35 +216,36 @@ def bulk_update_zones():
 
 # ---------------- Banner ----------------
 # GET (público): SiteBanner lo usa para leer el contenido
-@admin_bp.route('/banner', methods=['GET'])
+@admin_bp.route("/banner", methods=["GET"])
 def public_get_banner():
     cfg = _load_banner_cfg()
     return jsonify(cfg), 200
 
 # POST (solo admin): guardar configuración del banner
-@admin_bp.route('/banner', methods=['POST'])
+@admin_bp.route("/banner", methods=["POST"])
 @require_admin_auth
 def set_banner():
-    if session.get('role') != 'admin':
+    if session.get("role") != "admin":
         return jsonify({"success": False, "message": "Solo admin puede modificar el banner"}), 403
     data = request.get_json(silent=True) or {}
 
-    variant = str(data.get('variant') or 'info').lower().strip()
+    variant = str(data.get("variant") or "info").lower().strip()
     if variant not in ALLOWED_BANNER_VARIANTS:
-        variant = 'info'
+        variant = "info"
 
-    link_href = str(data.get('link_href') or '')
+    link_href = str(data.get("link_href") or "")
     if link_href and not _URL_RE.match(link_href):
         return jsonify({"success": False, "message": "link_href inválido (requiere http/https)"}), 400
 
     new_cfg = {
-        "enabled": bool(data.get('enabled', False)),
-        "text": str(data.get('text') or ''),
+        "enabled": bool(data.get("enabled", False)),
+        "text": str(data.get("text") or ""),
         "variant": variant,
-        "link_text": str(data.get('link_text') or ''),
+        "link_text": str(data.get("link_text") or ""),
         "link_href": link_href,
-        "id": str(data.get('id') or '')
+        "id": str(data.get("id") or "")
     }
     saved = _save_banner_cfg(new_cfg)
     return jsonify({"success": True, "banner": saved}), 200
+
 
