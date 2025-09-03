@@ -37,11 +37,27 @@ def download_report():
         # Si no hay estados, crear datos por defecto para los municipios
         if not states:
             municipios = [
-               'ACEGUÁ', 'ARBOLITO', 'ARÉVALO', 'BAÑADO DE MEDINA', 'CENTURIÓN',
-'CERRO DE LAS CUENTAS', 'FRAILE MUERTO', 'ISIDORO NOBLÍA', 'LAGUNA MERÍN',
-'LAS CAÑAS', 'PLÁCIDO ROSAS', 'QUEBRACHO', 'RAMÓN TRIGO', 'RÍO BRANCO',
-'TRES ISLAS', 'TUPAMBAÉ', 'Melo (GBA)', 'Melo (GBB)', 'Melo (GBC)',
-'LA MICAELA', 'MANGRULLO'
+               'ACEGUÁ',
+  'ARBOLITO',
+  'ARÉVALO',
+  'BAÑADO DE MEDINA',
+  'CENTURIÓN',
+  'CERRO DE LAS CUENTAS',
+  'FRAILE MUERTO',
+  'ISIDORO NOBLÍA',
+  'LA MICAELA',
+  'LAGUNA MERÍN',
+  'LAS CAÑAS',
+  'MANGRULLO',
+  'PLÁCIDO ROSAS',
+  'QUEBRACHO',
+  'RAMÓN TRIGO',
+  'RÍO BRANCO',
+  'TRES ISLAS',
+  'TUPAMBAÉ',
+  'MELO (GBA)',
+  'MELO (GBB)',
+  'MELO (GBC)',
             ]
             
             for municipio in municipios:
