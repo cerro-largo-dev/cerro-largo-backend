@@ -129,7 +129,7 @@ DESIRED_ZONE_ORDER = [
     "CERRO DE LAS CUENTAS", "FRAILE MUERTO", "ISIDORO NOBLÍA", "LAGUNA MERÍN",
     "LAS CAÑAS", "PLÁCIDO ROSAS", "QUEBRACHO", "RAMÓN TRIGO", "RÍO BRANCO",
     "TRES ISLAS", "TUPAMBAÉ", "Melo (GBA)", "Melo (GBB)", "Melo (GBC)",
-    "Melo (GCB)", "Melo (GEB)",
+    "LA MICAELA", "MANGRULLO",
 ]
 with app.app_context():
     db.create_all()
