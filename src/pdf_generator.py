@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 Generador de PDF para reportes de estado de municipios de Cerro Largo
-(con mapa estático renderizado desde GeoJSON)
+- Inserta mapa estático renderizado desde GeoJSON (via map_renderer.render_map_png)
+- Carga TODAS las zonas desde states_map si no se provee 'municipios'
+- Resuelve ruta del logo (alexlogo.png por defecto) de forma robusta
 """
 
 import os
 import json
 from datetime import datetime
 from tempfile import NamedTemporaryFile
+from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
@@ -16,26 +19,58 @@ from reportlab.lib.units import cm
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 
-# 👇 importar el renderizador de mapa
-# Si corrés dentro del proyecto Flask:
+# Render del mapa
 try:
     from src.map_renderer import render_map_png
 except Exception:
-    # Fallback si ejecutás este script standalone en la misma carpeta
+    # Fallback si se ejecuta standalone en el mismo directorio
     from map_renderer import render_map_png
 
-# Permite indicar el GeoJSON por variable de entorno
+# Permite indicar logo/geojson por ENV
+REPORT_LOGO_PATH = os.getenv("REPORT_LOGO_PATH", "alexlogo.png").strip()
 GEOJSON_PATH = os.getenv("GEOJSON_PATH", "").strip()
 
 
+def _resolve_asset_path(candidate_path: str) -> str:
+    """
+    Resuelve una ruta de asset (logo, etc.) buscando en ubicaciones típicas del backend.
+    Acepta nombre de archivo, ruta relativa o absoluta.
+    """
+    cand = Path(candidate_path)
+    if cand.is_absolute() and cand.exists():
+        return str(cand)
+
+    # si es relativo, probamos donde está este archivo y en rutas típicas
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parent / cand,                                            # mismo dir que este script
+        here.parent / "static" / "assets" / cand.name,                 # src/static/assets
+        here.parent.parent / "static" / "assets" / cand.name,          # <root>/static/assets
+        here.parent.parent / "src" / "static" / "assets" / cand.name,  # /opt/render/project/src/src/static/assets
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return str(cand)  # devolvemos lo pedido (por si luego existe en runtime)
+
+
+def _state_to_label(s: str) -> str:
+    s = (s or "").lower()
+    if s == "green":  return "Habilitado"
+    if s == "yellow": return "Precaución"
+    if s == "red":    return "Cerrado"
+    return "Desconocido"
+
+
 class ReporteEstadoMunicipios:
-    def __init__(self, logo_path="alexlogo.png", caminos_data=None):
-        self.logo_path = logo_path
+    def __init__(self, logo_path: str = REPORT_LOGO_PATH, caminos_data=None):
+        # Resolver logo de forma robusta
+        self.logo_path = _resolve_asset_path(logo_path or "alexlogo.png")
         self.caminos_data = caminos_data if caminos_data is not None else {}
         self.styles = getSampleStyleSheet()
-        self.setup_custom_styles()
+        self._setup_custom_styles()
 
-    def setup_custom_styles(self):
+    def _setup_custom_styles(self):
         """Configurar estilos personalizados para el PDF"""
         # Título
         self.styles.add(ParagraphStyle(
@@ -80,56 +115,37 @@ class ReporteEstadoMunicipios:
             spaceAfter=3,
         ))
 
-    def generar_datos_ejemplo(self):
-        """Generar datos de ejemplo para los municipios (si no se pasan)"""
-        return [
-            {"nombre": "Melo", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Río Branco", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Fraile Muerto", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Isidoro Noblía", "estado": "Precaución", "color": "Amarillo", "alerta": "Posible cierre de caminería"},
-            {"nombre": "Aceguá", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Tupambaé", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Arbolito", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Plácido Rosas", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Ramón Trigo", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Laguna Merín", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-        ]
-
-    def crear_tabla_municipios(self, municipios):
+    def _tabla_municipios(self, municipios):
         """Crear tabla con el estado de los municipios"""
-        data = [['Municipio', 'Estado', 'Color', 'Alerta']]
+        data = [['Municipio / Zona', 'Estado']]
         for m in municipios:
             data.append([
                 m.get('nombre', ''),
-                m.get('estado', ''),
-                m.get('color', ''),
-                m.get('alerta', '')
+                m.get('estado', '')
             ])
 
-        tabla = Table(data, colWidths=[4*cm, 3*cm, 2.5*cm, 6*cm])
-        tabla.setStyle(TableStyle([
+        table = Table(data, colWidths=[10*cm, 6*cm])
+        table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f4e79')),
             ('TEXTCOLOR',  (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN',      (0, 0), (-1, 0), 'CENTER'),
             ('FONTNAME',   (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE',   (0, 0), (-1, 0), 12),
 
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('TEXTCOLOR',  (0, 1), (-1, -1), colors.black),
             ('FONTNAME',   (0, 1), (-1, -1), 'Helvetica'),
             ('FONTSIZE',   (0, 1), (-1, -1), 10),
-            ('GRID',       (0, 0), (-1, -1), 1, colors.black),
-
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+            ('ALIGN',      (0, 1), (-1, -1), 'LEFT'),
+            ('GRID',       (0, 0), (-1, -1), 0.6, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.96,0.96,0.96)]),
         ]))
-        return tabla
+        return table
 
     def generar_pdf(
         self,
         nombre_archivo="reporte_municipios.pdf",
         municipios=None,
         *,
-        # Nuevos parámetros para incluir el mapa
+        # Si no se pasan municipios, se construyen desde states_map (TODOS)
         states_map: dict | None = None,     # {'ACEGUÁ':'green', 'MANGRULLO':'yellow', ...}
         geojson_path: str | None = None,    # ruta al GeoJSON (series/municipios/combined)
         mapa_ancho_cm: float = 16.0,
@@ -137,9 +153,21 @@ class ReporteEstadoMunicipios:
         draw_labels: bool = True,
         draw_legend: bool = True,
     ):
-        """Generar el PDF del reporte (con mapa si se provee states_map y geojson_path)."""
+        """
+        Genera el PDF (logo, cabecera, tabla, leyenda y mapa).
+        Si 'municipios' es None y hay 'states_map', arma la tabla con TODAS las zonas de states_map.
+        """
+        # --- Construir la lista de municipios si no la pasan ---
         if municipios is None:
-            municipios = self.generar_datos_ejemplo()
+            if states_map:
+                # Tomar TODOS los nombres/estados de la DB (o caller) y traducir etiquetas
+                municipios = [
+                    {"nombre": n, "estado": _state_to_label(v), "color": "", "alerta": ""}
+                    for n, v in sorted(states_map.items(), key=lambda kv: kv[0])
+                ]
+            else:
+                # Fallback mínimo si no llegó nada
+                municipios = []
 
         # Documento
         doc = SimpleDocTemplate(
@@ -148,43 +176,40 @@ class ReporteEstadoMunicipios:
             rightMargin=2*cm, leftMargin=2*cm,
             topMargin=2*cm, bottomMargin=2*cm
         )
-        elementos = []
+        elems = []
 
-        # Logo
+        # Logo (si existe)
         if os.path.exists(self.logo_path):
             try:
                 logo = Image(self.logo_path, width=8*cm, height=2*cm)
                 logo.hAlign = 'CENTER'
-                elementos.append(logo)
-                elementos.append(Spacer(1, 0.5*cm))
+                elems += [logo, Spacer(1, 0.5*cm)]
             except Exception as e:
-                print(f"Error al cargar el logo: {e}")
+                print(f"[pdf_generator] Error al cargar logo {self.logo_path}: {e}")
 
         # Titulado
-        elementos.append(Paragraph("Reporte de Estado de Municipios", self.styles['TituloReporte']))
-        elementos.append(Spacer(1, 0.3*cm))
-        elementos.append(Paragraph("Departamento de Cerro Largo", self.styles['Subtitulo']))
-        elementos.append(Spacer(1, 0.5*cm))
-
-        # Fecha/hora
-        fecha_hora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        elementos.append(Paragraph(f"Generado el: {fecha_hora}", self.styles['FechaHora']))
-        elementos.append(Spacer(1, 0.8*cm))
-
-        # Descripción
-        elementos.append(Paragraph(
-            "Este reporte muestra el estado actual de todos los municipios del departamento de Cerro Largo, "
-            "incluyendo el estado de tránsito pesado y las alertas vigentes.",
-            self.styles['TextoNormal']
-        ))
-        elementos.append(Spacer(1, 0.5*cm))
+        elems += [
+            Paragraph("Reporte de Estado de Municipios", self.styles['TituloReporte']),
+            Spacer(1, 0.3*cm),
+            Paragraph("Departamento de Cerro Largo", self.styles['Subtitulo']),
+            Spacer(1, 0.5*cm),
+            Paragraph(f"Generado el: {datetime.now():%d/%m/%Y %H:%M:%S}", self.styles['FechaHora']),
+            Spacer(1, 0.8*cm),
+            Paragraph(
+                "Este reporte muestra el estado actual de todos los municipios y zonas del departamento de Cerro Largo, "
+                "incluyendo estados de tránsito pesado y alertas vigentes.",
+                self.styles['TextoNormal']
+            ),
+            Spacer(1, 0.5*cm),
+        ]
 
         # Mapa (si hay datos y ruta válida)
-        if states_map and geojson_path and os.path.exists(geojson_path):
+        _geojson = geojson_path or (GEOJSON_PATH if GEOJSON_PATH else None)
+        if states_map and _geojson and os.path.exists(_geojson):
             try:
                 with NamedTemporaryFile(suffix=".png", delete=False) as tmp_img:
                     render_map_png(
-                        geojson_path=geojson_path,
+                        geojson_path=_geojson,
                         states_map=states_map,
                         out_png_path=tmp_img.name,
                         figsize=(8.27, 5.8),  # ~A5 apaisado
@@ -194,48 +219,49 @@ class ReporteEstadoMunicipios:
                     )
                     mapa_img = Image(tmp_img.name, width=mapa_ancho_cm*cm, height=mapa_alto_cm*cm)
                     mapa_img.hAlign = 'CENTER'
-                    elementos.append(Spacer(1, 0.4*cm))
-                    elementos.append(mapa_img)
-                    elementos.append(Spacer(1, 0.6*cm))
+                    elems += [Spacer(1, 0.4*cm), mapa_img, Spacer(1, 0.6*cm)]
             except Exception as e:
-                elementos.append(Paragraph(f"[Aviso] No se pudo insertar el mapa: {e}", self.styles['TextoNormal']))
-                elementos.append(Spacer(1, 0.4*cm))
+                elems += [Paragraph(f"[Aviso] No se pudo insertar el mapa: {e}", self.styles['TextoNormal']),
+                          Spacer(1, 0.4*cm)]
 
-        # Tabla de municipios
-        elementos.append(self.crear_tabla_municipios(municipios))
-        elementos.append(Spacer(1, 1*cm))
+        # Tabla de municipios (TODOS los de states_map si no pasaron explícitos)
+        elems += [self._tabla_municipios(municipios), Spacer(1, 1*cm)]
 
         # Caminos por municipio (opcional)
         if self.caminos_data:
-            elementos.append(Paragraph("Caminos por Municipio:", self.styles['Subtitulo']))
+            elems.append(Paragraph("Caminos por Municipio:", self.styles['Subtitulo']))
             for muni, caminos in self.caminos_data.items():
                 caminos_str = ", ".join(caminos)
-                elementos.append(Paragraph(f"<b>{muni}:</b> {caminos_str}", self.styles['ListaCaminos']))
-                elementos.append(Spacer(1, 0.2*cm))
-            elementos.append(Spacer(1, 1*cm))
+                elems.append(Paragraph(f"<b>{muni}:</b> {caminos_str}", self.styles['ListaCaminos']))
+                elems.append(Spacer(1, 0.2*cm))
+            elems.append(Spacer(1, 1*cm))
 
-        # Leyenda
-        elementos.append(Paragraph("Leyenda de Estados:", self.styles['Subtitulo']))
-        elementos.append(Paragraph("• <b>Verde:</b> Habilitado el tránsito pesado", self.styles['TextoNormal']))
-        elementos.append(Paragraph("• <b>Amarillo:</b> Precaución / posible cierre", self.styles['TextoNormal']))
-        elementos.append(Paragraph("• <b>Rojo:</b> Prohibido el tránsito pesado por lluvias", self.styles['TextoNormal']))
-        elementos.append(Spacer(1, 1*cm))
+        # Leyenda de estados
+        elems += [
+            Paragraph("Leyenda de Estados:", self.styles['Subtitulo']),
+            Paragraph("• <b>Verde:</b> Habilitado el tránsito pesado", self.styles['TextoNormal']),
+            Paragraph("• <b>Amarillo:</b> Precaución / posible cierre", self.styles['TextoNormal']),
+            Paragraph("• <b>Rojo:</b> Prohibido el tránsito pesado por lluvias", self.styles['TextoNormal']),
+            Spacer(1, 1*cm),
+        ]
 
         # Pie
-        elementos.append(Paragraph(
+        elems.append(Paragraph(
             "Para más información, consulte el mapa interactivo en línea o contacte a las autoridades locales.",
             self.styles['TextoNormal']
         ))
 
         # Construir PDF
-        doc.build(elementos)
-        print(f"PDF generado exitosamente: {nombre_archivo}")
+        doc.build(elems)
+        print(f"[pdf_generator] PDF generado: {nombre_archivo}")
         return nombre_archivo
 
 
-def _pick_geojson_local():
+# --------------------- Utilidad local para pruebas ---------------------
+
+def _pick_geojson_local() -> str | None:
     """
-    Devuelve la mejor ruta de GeoJSON disponible para el render del mapa.
+    Devuelve la mejor ruta de GeoJSON disponible para el render del mapa (modo local).
     Prioriza:
       1) GEOJSON_PATH (env)
       2) src/static/assets/combined_polygons.geojson
@@ -257,7 +283,7 @@ def _pick_geojson_local():
 
 
 def main():
-    """Función principal para generar el PDF de ejemplo"""
+    """Ejecución local de ejemplo"""
     # (opcional) cargar datos de caminos
     caminos_json_path = "/home/ubuntu/upload/Caminos_Cerro_Largo_por_Municipio.json"
     caminos_data = {}
@@ -265,7 +291,7 @@ def main():
         with open(caminos_json_path, 'r', encoding='utf-8') as f:
             caminos_data = json.load(f)
 
-    # Estados de ejemplo (en producción traelos de tu API/DB)
+    # Estados de ejemplo: en producción vendrán de DB (report.py)
     states_map = {
         "ACEGUÁ": "green",
         "MANGRULLO": "yellow",
@@ -275,11 +301,11 @@ def main():
 
     geojson_path = _pick_geojson_local()
 
-    generador = ReporteEstadoMunicipios(caminos_data=caminos_data)
-    generador.generar_pdf(
+    gen = ReporteEstadoMunicipios(logo_path=REPORT_LOGO_PATH, caminos_data=caminos_data)
+    gen.generar_pdf(
         nombre_archivo="reporte_ejemplo_municipios_con_mapa.pdf",
-        municipios=None,
-        states_map=states_map if geojson_path else None,
+        municipios=None,                # 👈 se arma desde states_map (TODAS las zonas)
+        states_map=states_map,
         geojson_path=geojson_path
     )
 
