@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 report_bp = Blueprint("report", __name__)
 
 # Opcionales por ENV
-LOGO_PATH = os.getenv("REPORT_LOGO_PATH", "alexlogo.png").strip()  # p.ej.: "src/static/assets/logo.png"
+LOGO_PATH = os.getenv("REPORT_LOGO_PATH", "alexlogo.png").strip()
 GEOJSON_PATH_ENV = os.getenv("GEOJSON_PATH", "").strip()
 
 
@@ -50,10 +50,7 @@ def _build_states_simple_map() -> Dict[str, str]:
     return out
 
 def _seed_if_empty():
-    """
-    Si la tabla está vacía, inicializa todas las zonas en 'green'.
-    (Lista en mayúsculas, con Mangrullo / La Micaela.)
-    """
+    """Si la tabla está vacía, inicializa todas las zonas en 'green'."""
     if ZoneState.get_all_states():
         return
     zonas = [
@@ -67,33 +64,18 @@ def _seed_if_empty():
         ZoneState.update_zone_state(z, 'green', updated_by='sistema')
 
 def _pick_geojson_file() -> str:
-    """
-    Selecciona el GeoJSON a usar para el render del mapa.
-
-    Prioriza:
-      1) GEOJSON_PATH (env).
-      2) combined_polygons.geojson (asset del frontend copiado al backend).
-      3) series_cerro_largo*.geojson
-      4) cerro_largo_municipios*.geojson
-      5) cualquier *.geojson bajo static/assets (incluye subcarpetas).
-    """
-    # 1) ENV
+    """Selecciona el GeoJSON a usar para el render del mapa."""
     if GEOJSON_PATH_ENV and Path(GEOJSON_PATH_ENV).exists():
         log.info(f"[report] GEOJSON_PATH={GEOJSON_PATH_ENV}")
         return GEOJSON_PATH_ENV
 
-    # 2) Buscar en rutas típicas del proyecto/deploy
     here = Path(__file__).resolve()
     bases = [
-        here.parents[1] / "static" / "assets",           # src/static/assets
-        here.parents[2] / "src" / "static" / "assets",   # /opt/render/project/src/src/static/assets
-        here.parents[2] / "static" / "assets",           # /opt/render/project/src/static/assets
+        here.parents[1] / "static" / "assets",
+        here.parents[2] / "src" / "static" / "assets",
+        here.parents[2] / "static" / "assets",
     ]
-
-    patterns = [
-        "combined_polygons.geojson",
-        "*.geojson",
-    ]
+    patterns = ["combined_polygons.geojson", "*.geojson"]
 
     found = []
     for base in bases:
@@ -119,28 +101,39 @@ def _pick_geojson_file() -> str:
 def download_report():
     """
     Genera y descarga un PDF usando ReporteEstadoMunicipios:
-    - Logo (REPORT_LOGO_PATH o alexlogo.png)
+    - Logo
     - Título / Subtítulo / Fecha
-    - Tabla de estados por zona
+    - Tabla de estados (TODOS los municipios)
     - Leyenda
-    - Mapa estático (con labels y leyenda dentro de la imagen)
+    - Mapa estático
     """
     try:
-        # Asegurar datos base y obtener estados
         _seed_if_empty()
         states_map = _build_states_simple_map()
-
-        # Resolver GeoJSON
         geojson_path = _pick_geojson_file()
 
-        # Generar PDF con tu clase (usa internamente render_map_png)
+        # Construir lista de municipios a partir de DB
+        def _state_label(s: str) -> str:
+            return (
+                "Habilitado" if s == "green" else
+                "Precaución" if s == "yellow" else
+                "Cerrado" if s == "red" else
+                "Desconocido"
+            )
+
+        municipios = [
+            {"nombre": nombre, "estado": _state_label(estado), "color": "", "alerta": ""}
+            for nombre, estado in sorted(states_map.items(), key=lambda kv: kv[0])
+        ]
+
+        # Generar PDF con tu clase
         with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
             gen = ReporteEstadoMunicipios(logo_path=LOGO_PATH)
             gen.generar_pdf(
                 nombre_archivo=tmp_pdf.name,
-                municipios=None,            # si querés, podés pasar tu propio listado
-                states_map=states_map,      # estados reales de DB
-                geojson_path=geojson_path,  # el geojson seleccionado
+                municipios=municipios,      # 👈 PASAMOS TODOS LOS MUNICIPIOS REALES
+                states_map=states_map,
+                geojson_path=geojson_path,
                 draw_labels=True,
                 draw_legend=True,
             )
@@ -154,9 +147,7 @@ def download_report():
         )
 
     except FileNotFoundError as e:
-        # GeoJSON ausente → texto con diagnóstico
         return jsonify({"success": False, "message": str(e)}), 500
 
     except Exception as e:
-        # Cualquier otro error
         return jsonify({"success": False, "message": f"Error generando reporte: {e}"}), 500
