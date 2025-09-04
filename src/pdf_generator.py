@@ -181,7 +181,7 @@ class ReporteEstadoMunicipios:
         # Logo (si existe)
         if os.path.exists(self.logo_path):
             try:
-                logo = Image(self.logo_path, width=8*cm, height=2*cm)
+                logo = Image(self.logo_path, width=8*cm, height=3*cm)
                 logo.hAlign = 'CENTER'
                 elems += [logo, Spacer(1, 0.5*cm)]
             except Exception as e:
@@ -189,10 +189,8 @@ class ReporteEstadoMunicipios:
 
         # Titulado
         elems += [
-            Paragraph("Reporte de Estado de Municipios", self.styles['TituloReporte']),
+            Paragraph("Reporte Camineria por Municipios.", self.styles['TituloReporte']),
             Spacer(1, 0.3*cm),
-            Paragraph("Departamento de Cerro Largo", self.styles['Subtitulo']),
-            Spacer(1, 0.5*cm),
             Paragraph(f"Generado el: {datetime.now():%d/%m/%Y %H:%M:%S}", self.styles['FechaHora']),
             Spacer(1, 0.8*cm),
             Paragraph(
