@@ -1,18 +1,27 @@
-
 #!/usr/bin/env python3
 """
 Generador de PDF para reportes de estado de municipios de Cerro Largo
+(con mapa estático renderizado desde GeoJSON)
 """
 
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch, cm
+from reportlab.lib.units import cm
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
+from tempfile import NamedTemporaryFile
 import os
 import json
+
+# 👇 importar el renderizador de mapa
+# Asegurate de que src/map_renderer.py exista y esté en el PYTHONPATH del proyecto
+try:
+    from src.map_renderer import render_map_png
+except Exception:
+    # Permitir ejecutar standalone en entorno local también
+    from map_renderer import render_map_png  # fallback si estás en la misma carpeta
 
 class ReporteEstadoMunicipios:
     def __init__(self, logo_path="alexlogo.png", caminos_data=None):
@@ -20,7 +29,7 @@ class ReporteEstadoMunicipios:
         self.caminos_data = caminos_data if caminos_data is not None else {}
         self.styles = getSampleStyleSheet()
         self.setup_custom_styles()
-        
+
     def setup_custom_styles(self):
         """Configurar estilos personalizados para el PDF"""
         # Estilo para el título principal
@@ -32,7 +41,7 @@ class ReporteEstadoMunicipios:
             alignment=TA_CENTER,
             textColor=colors.HexColor('#1f4e79')
         ))
-        
+
         # Estilo para subtítulos
         self.styles.add(ParagraphStyle(
             name='Subtitulo',
@@ -41,7 +50,7 @@ class ReporteEstadoMunicipios:
             spaceAfter=12,
             textColor=colors.HexColor('#2e75b6')
         ))
-        
+
         # Estilo para texto normal
         self.styles.add(ParagraphStyle(
             name='TextoNormal',
@@ -50,7 +59,7 @@ class ReporteEstadoMunicipios:
             spaceAfter=6,
             alignment=TA_LEFT
         ))
-        
+
         # Estilo para fecha y hora
         self.styles.add(ParagraphStyle(
             name='FechaHora',
@@ -60,7 +69,7 @@ class ReporteEstadoMunicipios:
             textColor=colors.grey
         ))
 
-        # Estilo para lista de caminos (ahora para una sola línea)
+        # Estilo para lista de caminos
         self.styles.add(ParagraphStyle(
             name='ListaCaminos',
             parent=self.styles['Normal'],
@@ -71,7 +80,7 @@ class ReporteEstadoMunicipios:
         ))
 
     def generar_datos_ejemplo(self):
-        """Generar datos de ejemplo para los municipios"""
+        """Generar datos de ejemplo para los municipios (si no se pasan)"""
         municipios = [
             {"nombre": "Melo", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
             {"nombre": "Río Branco", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
@@ -80,9 +89,9 @@ class ReporteEstadoMunicipios:
             {"nombre": "Aceguá", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
             {"nombre": "Tupambaé", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
             {"nombre": "Arbolito", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Placido Rosas", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
+            {"nombre": "Plácido Rosas", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
             {"nombre": "Ramón Trigo", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"},
-            {"nombre": "Lago Merín", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"}
+            {"nombre": "Laguna Merín", "estado": "Habilitado", "color": "Verde", "alerta": "Sin restricciones"}
         ]
         return municipios
 
@@ -90,19 +99,19 @@ class ReporteEstadoMunicipios:
         """Crear tabla con el estado de los municipios"""
         # Encabezados de la tabla
         data = [['Municipio', 'Estado', 'Color', 'Alerta']]
-        
+
         # Agregar datos de municipios
         for municipio in municipios:
             data.append([
-                municipio['nombre'],
-                municipio['estado'],
-                municipio['color'],
-                municipio['alerta']
+                municipio.get('nombre', ''),
+                municipio.get('estado', ''),
+                municipio.get('color', ''),
+                municipio.get('alerta', '')
             ])
-        
+
         # Crear tabla
         tabla = Table(data, colWidths=[4*cm, 3*cm, 2.5*cm, 6*cm])
-        
+
         # Estilo de la tabla
         tabla.setStyle(TableStyle([
             # Encabezado
@@ -111,25 +120,37 @@ class ReporteEstadoMunicipios:
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 12),
-            
-            # Cuerpo de la tabla
+
+            # Cuerpo
             ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
             ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 1), (-1, -1), 10),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            
-            # Alternar colores de filas
+
+            # Alternar filas
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
         ]))
-        
+
         return tabla
 
-    def generar_pdf(self, nombre_archivo="reporte_municipios.pdf", municipios=None):
-        """Generar el PDF del reporte"""
+    def generar_pdf(
+        self,
+        nombre_archivo="reporte_municipios.pdf",
+        municipios=None,
+        *,
+        # 👇 Nuevos parámetros para incluir el mapa
+        states_map: dict | None = None,     # {'ACEGUÁ':'green', 'Mangrullo':'yellow', ...}
+        geojson_path: str | None = None,    # ruta al GeoJSON (series o municipios)
+        mapa_ancho_cm: float = 16.0,
+        mapa_alto_cm: float = 11.0,
+        draw_labels: bool = True,
+        draw_legend: bool = True,
+    ):
+        """Generar el PDF del reporte (con mapa si se provee states_map y geojson_path)."""
         if municipios is None:
             municipios = self.generar_datos_ejemplo()
-        
+
         # Crear documento
         doc = SimpleDocTemplate(
             nombre_archivo,
@@ -139,10 +160,10 @@ class ReporteEstadoMunicipios:
             topMargin=2*cm,
             bottomMargin=2*cm
         )
-        
+
         # Lista de elementos del documento
         elementos = []
-        
+
         # Logo del gobierno (si existe)
         if os.path.exists(self.logo_path):
             try:
@@ -152,23 +173,23 @@ class ReporteEstadoMunicipios:
                 elementos.append(Spacer(1, 0.5*cm))
             except Exception as e:
                 print(f"Error al cargar el logo: {e}")
-        
+
         # Título del reporte
         titulo = Paragraph("Reporte de Estado de Municipios", self.styles['TituloReporte'])
         elementos.append(titulo)
         elementos.append(Spacer(1, 0.3*cm))
-        
+
         # Subtítulo con departamento
         subtitulo = Paragraph("Departamento de Cerro Largo", self.styles['Subtitulo'])
         elementos.append(subtitulo)
         elementos.append(Spacer(1, 0.5*cm))
-        
+
         # Fecha y hora de generación
         fecha_hora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         fecha_texto = Paragraph(f"Generado el: {fecha_hora}", self.styles['FechaHora'])
         elementos.append(fecha_texto)
-        elementos.append(Spacer(1, 1*cm))
-        
+        elementos.append(Spacer(1, 0.8*cm))
+
         # Descripción del reporte
         descripcion = Paragraph(
             "Este reporte muestra el estado actual de todos los municipios del departamento de Cerro Largo, "
@@ -177,7 +198,30 @@ class ReporteEstadoMunicipios:
         )
         elementos.append(descripcion)
         elementos.append(Spacer(1, 0.5*cm))
-        
+
+        # 👉 Si hay mapa: renderizar PNG e insertarlo
+        if states_map and geojson_path and os.path.exists(geojson_path):
+            try:
+                with NamedTemporaryFile(suffix=".png", delete=False) as tmp_img:
+                    render_map_png(
+                        geojson_path=geojson_path,
+                        states_map=states_map,
+                        out_png_path=tmp_img.name,
+                        figsize=(8.27, 5.8),  # ~A5 apaisado
+                        dpi=200,
+                        draw_labels=draw_labels,
+                        draw_legend=draw_legend
+                    )
+                    mapa_img = Image(tmp_img.name, width=mapa_ancho_cm*cm, height=mapa_alto_cm*cm)
+                    mapa_img.hAlign = 'CENTER'
+                    elementos.append(Spacer(1, 0.4*cm))
+                    elementos.append(mapa_img)
+                    elementos.append(Spacer(1, 0.6*cm))
+            except Exception as e:
+                # No romper el PDF si falla el render del mapa
+                elementos.append(Paragraph(f"[Aviso] No se pudo insertar el mapa: {e}", self.styles['TextoNormal']))
+                elementos.append(Spacer(1, 0.4*cm))
+
         # Tabla con el estado de los municipios
         tabla = self.crear_tabla_municipios(municipios)
         elementos.append(tabla)
@@ -191,46 +235,67 @@ class ReporteEstadoMunicipios:
                 elementos.append(Paragraph(f"<b>{municipio_nombre}:</b> {caminos_str}", self.styles['ListaCaminos']))
                 elementos.append(Spacer(1, 0.2*cm))
             elementos.append(Spacer(1, 1*cm))
-        
+
         # Leyenda de colores
         leyenda_titulo = Paragraph("Leyenda de Estados:", self.styles['Subtitulo'])
         elementos.append(leyenda_titulo)
-        
+
         leyenda_verde = Paragraph("• <b>Verde:</b> Habilitado el tránsito pesado", self.styles['TextoNormal'])
-        leyenda_amarillo = Paragraph("• <b>Amarillo:</b> Posible cierre de caminería", self.styles['TextoNormal'])
+        leyenda_amarillo = Paragraph("• <b>Amarillo:</b> Precaución / posible cierre", self.styles['TextoNormal'])
         leyenda_rojo = Paragraph("• <b>Rojo:</b> Prohibido el tránsito pesado por lluvias", self.styles['TextoNormal'])
-        
+
         elementos.append(leyenda_verde)
         elementos.append(leyenda_amarillo)
         elementos.append(leyenda_rojo)
         elementos.append(Spacer(1, 1*cm))
-        
+
         # Pie de página con información adicional
         pie_info = Paragraph(
             "Para más información, consulte el mapa interactivo en línea o contacte a las autoridades locales.",
             self.styles['TextoNormal']
         )
         elementos.append(pie_info)
-        
+
         # Construir el PDF
         doc.build(elementos)
         print(f"PDF generado exitosamente: {nombre_archivo}")
         return nombre_archivo
 
+
 def main():
     """Función principal para generar el PDF de ejemplo"""
-    # Cargar datos de caminos desde el archivo JSON
+    # Cargar datos de caminos desde el archivo JSON (opcional)
     caminos_json_path = "/home/ubuntu/upload/Caminos_Cerro_Largo_por_Municipio.json"
     caminos_data = {}
     if os.path.exists(caminos_json_path):
         with open(caminos_json_path, 'r', encoding='utf-8') as f:
             caminos_data = json.load(f)
 
+    # Ejemplo de estados (podés traerlos de tu API/DB)
+    states_map = {
+        "ACEGUÁ": "green",
+        "MANGRULLO": "yellow",
+        "LA MICAELA": "red",
+        "RÍO BRANCO": "green",
+    }
+
+    # Ruta al GeoJSON (ajustar a tu proyecto)
+    # series preferido; si no, municipios
+    geojson_path_candidates = [
+        "src/static/assets/series_cerro_largo-CsPIPpgW.geojson",
+        "src/static/assets/cerro_largo_municipios_2025-XyT-VvXO.geojson",
+    ]
+    geojson_path = next((p for p in geojson_path_candidates if os.path.exists(p)), None)
+
     generador = ReporteEstadoMunicipios(caminos_data=caminos_data)
-    archivo_pdf = generador.generar_pdf("reporte_ejemplo_municipios_con_caminos_conciso.pdf")
+    archivo_pdf = generador.generar_pdf(
+        "reporte_ejemplo_municipios_con_mapa.pdf",
+        municipios=None,
+        states_map=states_map if geojson_path else None,
+        geojson_path=geojson_path
+    )
     return archivo_pdf
+
 
 if __name__ == "__main__":
     main()
-
-
