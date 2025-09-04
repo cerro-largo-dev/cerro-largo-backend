@@ -3,8 +3,7 @@
 Generador de PDF para reportes de estado de municipios de Cerro Largo
 - Inserta mapa estático renderizado desde GeoJSON (via map_renderer.render_map_png)
 - Carga TODAS las zonas desde states_map si no se provee 'municipios'
-- Resuelve ruta del logo (alexlogo.png por defecto) y NO lo deforma
-- Usa zona horaria America/Montevideo (configurable con REPORT_TZ)
+- Resuelve ruta del logo (alexlogo.png por defecto) de forma robusta
 """
 
 import os
@@ -13,6 +12,7 @@ from datetime import datetime
 from tempfile import NamedTemporaryFile
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
@@ -28,10 +28,10 @@ except Exception:
     # Fallback si se ejecuta standalone en el mismo directorio
     from map_renderer import render_map_png
 
-# Config por ENV
+# Permite indicar logo/geojson por ENV
 REPORT_LOGO_PATH = os.getenv("REPORT_LOGO_PATH", "alexlogo.png").strip()
-GEOJSON_PATH = os.getenv("GEOJSON_PATH", "").strip()
 REPORT_TZ = os.getenv("REPORT_TZ", "America/Montevideo").strip()
+GEOJSON_PATH = os.getenv("GEOJSON_PATH", "").strip()
 
 
 def _resolve_asset_path(candidate_path: str) -> str:
@@ -100,15 +100,6 @@ class ReporteEstadoMunicipios:
             spaceAfter=6,
             alignment=TA_LEFT
         ))
-        # Texto centrado menor (para el texto bajo el mapa si querés diferenciar)
-        self.styles.add(ParagraphStyle(
-            name='TextoMapa',
-            parent=self.styles['Normal'],
-            fontSize=10,
-            spaceAfter=8,
-            alignment=TA_CENTER,
-            textColor=colors.HexColor('#333333')
-        ))
         # Fecha/hora
         self.styles.add(ParagraphStyle(
             name='FechaHora',
@@ -166,17 +157,19 @@ class ReporteEstadoMunicipios:
         draw_legend: bool = True,
     ):
         """
-        Genera el PDF (logo, cabecera, mapa + texto, tabla, leyenda).
+        Genera el PDF (logo, cabecera, tabla, leyenda y mapa).
         Si 'municipios' es None y hay 'states_map', arma la tabla con TODAS las zonas de states_map.
         """
         # --- Construir la lista de municipios si no la pasan ---
         if municipios is None:
             if states_map:
+                # Tomar TODOS los nombres/estados de la DB (o caller) y traducir etiquetas
                 municipios = [
                     {"nombre": n, "estado": _state_to_label(v), "color": "", "alerta": ""}
                     for n, v in sorted(states_map.items(), key=lambda kv: kv[0])
                 ]
             else:
+                # Fallback mínimo si no llegó nada
                 municipios = []
 
         # Documento
@@ -188,25 +181,20 @@ class ReporteEstadoMunicipios:
         )
         elems = []
 
-        # Logo (si existe) — no deformar: preserveAspectRatio=True
+        # Logo (si existe)
         if os.path.exists(self.logo_path):
             try:
-                logo = Image(self.logo_path, width=8*cm, height=2*cm, preserveAspectRatio=True)
+                logo = Image(self.logo_path, width=8*cm, height=3*cm)
                 logo.hAlign = 'CENTER'
                 elems += [logo, Spacer(1, 0.5*cm)]
             except Exception as e:
                 print(f"[pdf_generator] Error al cargar logo {self.logo_path}: {e}")
 
-        # Hora local (Montevideo por defecto)
-        now = datetime.now(ZoneInfo(REPORT_TZ))
-
         # Titulado
         elems += [
-            Paragraph("Reporte de Estado de Municipios", self.styles['TituloReporte']),
+            Paragraph("Reporte Camineria por Municipios.", self.styles['TituloReporte']),
             Spacer(1, 0.3*cm),
-            Paragraph("Departamento de Cerro Largo", self.styles['Subtitulo']),
-            Spacer(1, 0.5*cm),
-            Paragraph(f"Generado el: {now:%d/%m/%Y %H:%M:%S}", self.styles['FechaHora']),
+            Paragraph(f"Generado el: {datetime.now():%d/%m/%Y %H:%M:%S}", self.styles['FechaHora']),
             Spacer(1, 0.8*cm),
         ]
 
@@ -226,8 +214,8 @@ class ReporteEstadoMunicipios:
                     )
                     mapa_img = Image(tmp_img.name, width=mapa_ancho_cm*cm, height=mapa_alto_cm*cm)
                     mapa_img.hAlign = 'CENTER'
-                    elems += [Spacer(1, 0.4*cm), mapa_img, Spacer(1, 0.4*cm)]
-                    # ⬇️ Texto solicitado DEBAJO del mapa
+                    elems += [Spacer(1, 0.4*cm), mapa_img, Spacer(1, 0.6*cm)]
+                                # ⬇️ Texto solicitado DEBAJO del mapa
                     elems += [Paragraph(
                         "Este reporte muestra el estado actual de todos los municipios y zonas del departamento de "
                         "Cerro Largo, incluyendo estados de tránsito pesado y alertas vigentes.",
@@ -238,6 +226,7 @@ class ReporteEstadoMunicipios:
                 elems += [Paragraph(f"[Aviso] No se pudo insertar el mapa: {e}", self.styles['TextoNormal']),
                           Spacer(1, 0.4*cm)]
 
+    
         # Tabla de municipios (TODOS los de states_map si no pasaron explícitos)
         elems += [self._tabla_municipios(municipios), Spacer(1, 1*cm)]
 
