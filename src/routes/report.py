@@ -1,228 +1,296 @@
-from flask import Blueprint, request, jsonify, send_file, session
-from src.models.zone_state import ZoneState
-from datetime import datetime
+# src/routes/report.py
+from __future__ import annotations
+
+"""
+Reporte de caminería con mapa estático:
+- Busca el GeoJSON en src/static/assets (o vía env GEOJSON_PATH).
+- Renderiza PNG del mapa con src.map_renderer.render_map_png.
+- Incrusta la imagen en un PDF (ReportLab) y lo devuelve.
+- Fallback: TXT si no hay ReportLab o falla el render.
+"""
+
 import os
+import logging
 import tempfile
-import json
+from glob import glob
+from datetime import datetime
+from pathlib import Path
+from typing import Dict
 
-# Importar el generador de PDF
+from flask import Blueprint, jsonify, send_file
+
+# Estados desde la DB
+from src.models.zone_state import ZoneState
+
+# Render del mapa (PNG)
+from src.map_renderer import render_map_png
+
+# PDF (ReportLab) opcional
 try:
-    from src.pdf_generator import ReporteEstadoMunicipios
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
     PDF_AVAILABLE = True
-except ImportError:
+except Exception:
     PDF_AVAILABLE = False
-    print("Warning: PDF generator not available. Install reportlab to enable PDF reports.")
 
-report_bp = Blueprint('report', __name__)
+log = logging.getLogger(__name__)
+report_bp = Blueprint("report", __name__)
 
-def require_admin_auth(f):
-    """Decorador para requerir autenticación de administrador"""
-    def decorated_function(*args, **kwargs):
-        if not session.get('admin_authenticated', False):
-            return jsonify({
-                'success': False,
-                'message': 'Acceso no autorizado'
-            }), 401
-        return f(*args, **kwargs)
-    decorated_function.__name__ = f.__name__
-    return decorated_function
+# ---------------------------------------------------------------------
+# Utils
+# ---------------------------------------------------------------------
 
-@report_bp.route('/download', methods=['GET'])
-def download_report():
-    """Generar y descargar reporte de estados de zonas en PDF - disponible para todos los usuarios"""
-    try:
-        # Obtener todos los estados de las zonas
-        states = ZoneState.get_all_states()
-        
-        # Si no hay estados, crear datos por defecto para los municipios
-        if not states:
-            municipios = [
-               'ACEGUÁ',
-  'ARBOLITO',
-  'ARÉVALO',
-  'BAÑADO DE MEDINA',
-  'CENTURIÓN',
-  'CERRO DE LAS CUENTAS',
-  'FRAILE MUERTO',
-  'ISIDORO NOBLÍA',
-  'LA MICAELA',
-  'LAGUNA MERÍN',
-  'LAS CAÑAS',
-  'MANGRULLO',
-  'PLÁCIDO ROSAS',
-  'QUEBRACHO',
-  'RAMÓN TRIGO',
-  'RÍO BRANCO',
-  'TRES ISLAS',
-  'TUPAMBAÉ',
-  'MELO (GBA)',
-  'MELO (GBB)',
-  'MELO (GBC)',
-            ]
-            
-            for municipio in municipios:
-                ZoneState.update_zone_state(municipio, 'green', 'sistema')
-            
-            states = ZoneState.get_all_states()
-        
-        # Si el generador de PDF está disponible, generar PDF
-        if PDF_AVAILABLE:
-            # Convertir estados a formato para el PDF
-            municipios = []
-            for zone_name, zone_data in states.items():
-                state = zone_data.get('state', 'green')
-                
-                # Mapear estados a formato legible
-                estado_map = {
-                    'green': 'Habilitado',
-                    'yellow': 'Precaución', 
-                    'red': 'Suspendido'
-                }
-                
-                color_map = {
-                    'green': 'Verde',
-                    'yellow': 'Amarillo',
-                    'red': 'Rojo'
-                }
-                
-                alerta_map = {
-                    'green': 'Sin restricciones',
-                    'yellow': 'Posible cierre de caminería',
-                    'red': 'Prohibido el tránsito pesado por lluvias'
-                }
-                
-                municipios.append({
-                    'nombre': zone_name,
-                    'estado': estado_map.get(state, 'Sin estado'),
-                    'color': color_map.get(state, 'Sin color'),
-                    'alerta': alerta_map.get(state, 'Sin información')
-                })
-            
-            # Crear generador de PDF con logo
-            logo_path = os.path.join(os.path.dirname(__file__), '..', 'alexlogo.png')
-            generador = ReporteEstadoMunicipios(logo_path=logo_path)
-            
-            # Crear archivo temporal para el PDF
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                archivo_pdf = generador.generar_pdf(tmp_file.name, municipios)
-                
-                # Enviar el archivo PDF como respuesta
-                return send_file(
-                    archivo_pdf,
-                    as_attachment=True,
-                    download_name=f'reporte_camineria_cerro_largo_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
-                    mimetype='application/pdf'
-                )
-        
-        # Si no hay PDF disponible, generar reporte en texto
+def _build_states_simple_map() -> Dict[str, str]:
+    """
+    Devuelve { 'NOMBRE ZONA': 'green|yellow|red', ... } a partir del modelo.
+    """
+    states_raw = ZoneState.get_all_states() or {}
+    out: Dict[str, str] = {}
+    for name, data in states_raw.items():
+        if isinstance(data, dict):
+            st = data.get("state") or data.get("color") or "green"
         else:
-            return download_text_report(states)
-        
-    except Exception as e:
-        print(f"Error generating PDF report: {str(e)}")
-        # En caso de error con PDF, generar reporte en texto
-        try:
-            states = ZoneState.get_all_states()
-            return download_text_report(states)
-        except Exception as text_error:
-            return jsonify({
-                'success': False,
-                'message': f'Error generando reporte: {str(text_error)}'
-            }), 500
+            st = str(data)
+        out[name] = str(st).lower()
+    return out
 
-def download_text_report(states):
-    """Generar reporte en formato texto como fallback"""
-    # Crear archivo temporal
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w', encoding='utf-8')
-    
-    # Escribir contenido del reporte
+def _seed_if_empty():
+    """
+    Si la tabla está vacía, inicializa todas las zonas en 'green'.
+    (Lista en mayúsculas, orden alfabético, con Mangrullo/La Micaela)
+    """
+    current = ZoneState.get_all_states()
+    if current:
+        return
+
+    municipios = [
+        'ACEGUÁ',
+        'ARBOLITO',
+        'ARÉVALO',
+        'BAÑADO DE MEDINA',
+        'CENTURIÓN',
+        'CERRO DE LAS CUENTAS',
+        'FRAILE MUERTO',
+        'ISIDORO NOBLÍA',
+        'LA MICAELA',
+        'LAGUNA MERÍN',
+        'LAS CAÑAS',
+        'MANGRULLO',
+        'PLÁCIDO ROSAS',
+        'QUEBRACHO',
+        'RAMÓN TRIGO',
+        'RÍO BRANCO',
+        'TRES ISLAS',
+        'TUPAMBAÉ',
+        'MELO (GBA)',
+        'MELO (GBB)',
+        'MELO (GBC)',
+    ]
+    for m in municipios:
+        ZoneState.update_zone_state(m, 'green', updated_by='sistema')
+
+def _pick_geojson_file() -> str:
+    """
+    Selecciona el GeoJSON a usar para el render del mapa.
+
+    Prioriza:
+      1) RUTA en variable de entorno GEOJSON_PATH.
+      2) combined_polygons.geojson (tu asset del frontend copiado a backend).
+      3) series_cerro_largo*.geojson
+      4) cerro_largo_municipios*.geojson
+      5) cualquier *.geojson bajo static/assets (incl. subcarpetas)
+    """
+    # 1) ENV explícito
+    env_path = os.getenv("GEOJSON_PATH")
+    if env_path and Path(env_path).exists():
+        log.info(f"[report] GEOJSON_PATH={env_path}")
+        return env_path
+
+    here = Path(__file__).resolve()
+
+    # Carpetas candidatas típicas en Render/Flask
+    bases = [
+        here.parents[1] / "static" / "assets",           # src/static/assets
+        here.parents[2] / "src" / "static" / "assets",   # /opt/render/project/src/src/static/assets
+        here.parents[2] / "static" / "assets",           # /opt/render/project/src/static/assets
+    ]
+
+    patterns = [
+        "combined_polygons.geojson",      # 👈 tu archivo real del frontend copiado al backend
+        "series_cerro_largo*.geojson",
+        "cerro_largo_municipios*.geojson",
+        "*.geojson",
+    ]
+
+    found = []
+    for base in bases:
+        if base.exists():
+            for pat in patterns:
+                found += glob(str(base / pat))
+                found += glob(str(base / "**" / pat), recursive=True)
+
+    if found:
+        found = sorted(set(found))
+        log.info(f"[report] GEOJSON encontrados: {found}")
+        return found[0]
+
+    raise FileNotFoundError(
+        "No se encontró GeoJSON. Copiá 'combined_polygons.geojson' a src/static/assets "
+        "o seteá GEOJSON_PATH con la ruta absoluta."
+    )
+
+def _draw_pdf_with_map(img_path: str, out_pdf_path: str, states_map: Dict[str, str]):
+    """
+    Crea un PDF A4 con la imagen del mapa y un resumen simple.
+    """
+    c = canvas.Canvas(out_pdf_path, pagesize=A4)
+    w, h = A4
+
+    # Encabezado
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(40, h - 50, "Reporte de Estado de Zonas – Cerro Largo")
+
+    # Fecha/hora
+    c.setFont("Helvetica", 9)
+    c.drawString(40, h - 66, datetime.now().strftime("Generado el %d/%m/%Y %H:%M"))
+
+    # Imagen del mapa
+    try:
+        c.drawImage(ImageReader(img_path), 40, 170, width=w - 80, height=h - 260,
+                    preserveAspectRatio=True, anchor='n')
+    except Exception as e:
+        # no romper el PDF si falla la imagen
+        c.setFont("Helvetica", 10)
+        c.drawString(40, 170, f"[Aviso] No se pudo insertar el mapa: {e}")
+
+    # Resumen por estado
+    green = sum(1 for v in states_map.values() if v == 'green')
+    yellow = sum(1 for v in states_map.values() if v == 'yellow')
+    red = sum(1 for v in states_map.values() if v == 'red')
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(40, 140, "Resumen general")
+    c.setFont("Helvetica", 10)
+    c.drawString(40, 124, f"🟩 Habilitadas: {green}")
+    c.drawString(200, 124, f"🟨 Precaución: {yellow}")
+    c.drawString(360, 124, f"🟥 Cerradas: {red}")
+
+    # Pie
+    c.setFont("Helvetica", 9)
+    c.drawString(40, 100, "Sistema de Gestión de Caminería – Gobierno de Cerro Largo")
+    c.showPage()
+    c.save()
+
+def _download_text_report(states_map: Dict[str, str], error: str | None = None):
+    """
+    Fallback TXT con detalle de estados por zona (si falla PDF o no hay ReportLab).
+    """
     now = datetime.now()
-    temp_file.write("REPORTE DE ESTADOS DE CAMINERÍA - CERRO LARGO\n")
-    temp_file.write("=" * 50 + "\n\n")
-    temp_file.write(f"Generado el: {now.strftime('%d/%m/%Y %H:%M:%S')}\n\n")
-    
-    # Resumen
-    total_zones = len(states)
-    green_count = sum(1 for zone_data in states.values() if zone_data.get('state') == 'green')
-    yellow_count = sum(1 for zone_data in states.values() if zone_data.get('state') == 'yellow')
-    red_count = sum(1 for zone_data in states.values() if zone_data.get('state') == 'red')
-    
-    temp_file.write("RESUMEN GENERAL\n")
-    temp_file.write("-" * 20 + "\n")
-    temp_file.write(f"Total de Zonas: {total_zones}\n")
-    temp_file.write(f"🟩 Habilitadas: {green_count}\n")
-    temp_file.write(f"🟨 En Alerta: {yellow_count}\n")
-    temp_file.write(f"🟥 Suspendidas: {red_count}\n\n")
-    
-    # Detalle por zona
-    temp_file.write("DETALLE POR ZONA/MUNICIPIO\n")
-    temp_file.write("-" * 30 + "\n")
-    
-    for zone_name, zone_data in sorted(states.items()):
-        state = zone_data.get('state', 'green')
-        state_label = {
-            'green': '🟩 Habilitado',
-            'yellow': '🟨 Alerta',
-            'red': '🟥 Suspendido'
-        }.get(state, 'Sin estado')
-        
-        updated_at = zone_data.get('updated_at', 'N/A')
-        if updated_at != 'N/A':
-            try:
-                if isinstance(updated_at, str):
-                    dt = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
-                else:
-                    dt = updated_at
-                updated_at = dt.strftime("%d/%m/%Y %H:%M")
-            except:
-                updated_at = 'N/A'
-        
-        updated_by = zone_data.get('updated_by', 'N/A')
-        
-        temp_file.write(f"\nZona: {zone_name}\n")
-        temp_file.write(f"Estado: {state_label}\n")
-        temp_file.write(f"Última Actualización: {updated_at}\n")
-        temp_file.write(f"Actualizado Por: {updated_by}\n")
-        temp_file.write("-" * 40 + "\n")
-    
-    temp_file.write(f"\n\nSistema de Gestión de Caminería - Cerro Largo\n")
-    temp_file.write(f"Departamento de Cerro Largo - Uruguay\n")
-    temp_file.close()
-    
-    # Enviar archivo
+    tf = tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w', encoding='utf-8')
+
+    tf.write("REPORTE DE ESTADOS DE CAMINERÍA - CERRO LARGO\n")
+    tf.write("=" * 50 + "\n\n")
+    tf.write(f"Generado el: {now.strftime('%d/%m/%Y %H:%M:%S')}\n")
+    if error:
+        tf.write(f"\n[AVISO] Render PDF deshabilitado o con error: {error}\n")
+    tf.write("\n")
+
+    total = len(states_map)
+    green = sum(1 for v in states_map.values() if v == 'green')
+    yellow = sum(1 for v in states_map.values() if v == 'yellow')
+    red = sum(1 for v in states_map.values() if v == 'red')
+
+    tf.write("RESUMEN GENERAL\n")
+    tf.write("-" * 20 + "\n")
+    tf.write(f"Total de Zonas: {total}\n")
+    tf.write(f"🟩 Habilitadas: {green}\n")
+    tf.write(f"🟨 Precaución: {yellow}\n")
+    tf.write(f"🟥 Cerradas: {red}\n\n")
+
+    tf.write("DETALLE POR ZONA/MUNICIPIO\n")
+    tf.write("-" * 30 + "\n")
+    for name in sorted(states_map.keys()):
+        state = states_map[name]
+        label = '🟩 Habilitado' if state == 'green' else (
+            '🟨 Precaución' if state == 'yellow' else (
+                '🟥 Cerrado' if state == 'red' else 'Desconocido'
+            )
+        )
+        tf.write(f"\nZona: {name}\nEstado: {label}\n")
+        tf.write("-" * 40 + "\n")
+
+    tf.write("\n\nSistema de Gestión de Caminería - Cerro Largo\n")
+    tf.write("Departamento de Cerro Largo - Uruguay\n")
+    tf.close()
+
     return send_file(
-        temp_file.name,
+        tf.name,
         as_attachment=True,
         download_name=f'reporte_camineria_cerro_largo_{now.strftime("%Y%m%d_%H%M%S")}.txt',
         mimetype='text/plain'
     )
 
-@report_bp.route('/generate-data', methods=['GET'])
-def generate_report_data():
-    """Generar datos del reporte para el frontend - disponible para todos"""
+# ---------------------------------------------------------------------
+# Rutas
+# ---------------------------------------------------------------------
+
+@report_bp.route("/download", methods=["GET"])
+def download_report():
+    """
+    Genera y descarga un PDF con el mapa estático y resumen de estados.
+    (Normalmente expuesto como /api/report/download al registrar el blueprint)
+    """
     try:
-        states = ZoneState.get_all_states()
-        
-        # Contar estados
-        state_counts = {'green': 0, 'yellow': 0, 'red': 0}
-        for zone_data in states.values():
-            state = zone_data.get('state', 'green')
-            state_counts[state] = state_counts.get(state, 0) + 1
-        
-        report_data = {
-            'generated_at': datetime.utcnow().isoformat(),
-            'total_zones': len(states),
-            'state_summary': state_counts,
-            'zones': states
-        }
-        
-        return jsonify({
-            'success': True,
-            'report': report_data
-        }), 200
-        
+        # Asegurar datos base
+        _seed_if_empty()
+
+        # Mapa simple de estados
+        states_map = _build_states_simple_map()
+
+        if not PDF_AVAILABLE:
+            return _download_text_report(states_map, error="ReportLab no disponible")
+
+        # Buscar GeoJSON
+        geojson_path = _pick_geojson_file()
+
+        # Render PNG del mapa
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img:
+            render_map_png(
+                geojson_path=geojson_path,
+                states_map=states_map,
+                out_png_path=tmp_img.name,
+                figsize=(8.27, 5.8),  # Aprox A5 apaisado
+                dpi=200,
+                draw_labels=True,
+                draw_legend=True,
+            )
+            png_path = tmp_img.name
+
+        # Construir PDF final con la imagen
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            _draw_pdf_with_map(png_path, tmp_pdf.name, states_map)
+            pdf_path = tmp_pdf.name
+
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=f'reporte_camineria_cerro_largo_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+            mimetype='application/pdf'
+        )
+
+    except FileNotFoundError as e:
+        # GeoJSON no encontrado → TXT de respaldo + mensaje
+        try:
+            states_map = _build_states_simple_map()
+        except Exception:
+            states_map = {}
+        return _download_text_report(states_map, error=str(e))
+
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error al generar datos del reporte: {str(e)}'
-        }), 500
+        # Cualquier otro error → TXT de respaldo
+        try:
+            states_map = _build_states_simple_map()
+        except Exception:
+            states_map = {}
+        return _download_text_report(states_map, error=f"Error generando PDF: {e}")
