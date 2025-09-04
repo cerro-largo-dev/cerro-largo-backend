@@ -208,12 +208,6 @@ class ReporteEstadoMunicipios:
             Spacer(1, 0.5*cm),
             Paragraph(f"Generado el: {now:%d/%m/%Y %H:%M:%S}", self.styles['FechaHora']),
             Spacer(1, 0.8*cm),
-            Paragraph(
-                "Este reporte muestra el estado actual de todos los municipios y zonas del departamento de Cerro Largo, "
-                "incluyendo estados de tránsito pesado y alertas vigentes.",
-                self.styles['TextoNormal']
-            ),
-            Spacer(1, 0.5*cm),
         ]
 
         # Mapa (si hay datos y ruta válida)
