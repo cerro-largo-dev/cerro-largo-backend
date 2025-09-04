@@ -92,8 +92,6 @@ def _pick_geojson_file() -> str:
 
     patterns = [
         "combined_polygons.geojson",
-        "series_cerro_largo*.geojson",
-        "cerro_largo_municipios*.geojson",
         "*.geojson",
     ]
 
