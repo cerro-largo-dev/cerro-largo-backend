@@ -3,14 +3,19 @@ from __future__ import annotations
 
 """
 Endpoint de descarga de reporte:
-- Usa la clase ReporteEstadoMunicipios de pdf_generator.py (logo, títulos, tabla, leyenda).
-- Inserta el mapa estático renderizado (vía render_map_png llamado desde pdf_generator).
-- Busca el GeoJSON en src/static/assets o por la variable de entorno GEOJSON_PATH.
+- Usa ReporteEstadoMunicipios de pdf_generator.py (logo, títulos, tabla, leyenda).
+- Inserta mapa estático (render_map_png llamado desde pdf_generator).
+- Busca el GeoJSON en src/static/assets o por GEOJSON_PATH (ENV).
+- Normaliza y fusiona alias de zonas (MELO (GEB)->MANGRULLO, MELO (GCB)->LA MICAELA).
+- Usa zona horaria America/Montevideo para el nombre del archivo (REPORT_TZ).
 """
 
 import os
 import logging
+import unicodedata
+import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from glob import glob
 from tempfile import NamedTemporaryFile
@@ -30,6 +35,27 @@ report_bp = Blueprint("report", __name__)
 # Opcionales por ENV
 LOGO_PATH = os.getenv("REPORT_LOGO_PATH", "alexlogo.png").strip()
 GEOJSON_PATH_ENV = os.getenv("GEOJSON_PATH", "").strip()
+REPORT_TZ = os.getenv("REPORT_TZ", "America/Montevideo").strip()
+
+
+# --------------------------- Utilidades de nombres ---------------------------
+
+def _norm_key(s: str) -> str:
+    s = (s or "").strip()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    s = s.upper()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+def _alias_name(name: str) -> str:
+    """Mapea alias antiguos a nombres nuevos y retorna en MAYÚSCULAS."""
+    k = _norm_key(name)
+    if k == "MELO (GEB)":
+        return "MANGRULLO"
+    if k == "MELO (GCB)":
+        return "LA MICAELA"
+    return k
 
 
 # --------------------------- Utilidades de datos ---------------------------
@@ -37,17 +63,22 @@ GEOJSON_PATH_ENV = os.getenv("GEOJSON_PATH", "").strip()
 def _build_states_simple_map() -> Dict[str, str]:
     """
     Devuelve { 'ZONA': 'green|yellow|red', ... } a partir del modelo ZoneState.
-    Soporta {'ZONA': 'green'} o {'ZONA': {'state': 'green', ...}}.
+    - Soporta {'ZONA': 'green'} o {'ZONA': {'state': 'green', ...}}.
+    - Normaliza nombres y fusiona alias (GEB/GCB).
+    - Si hay duplicados, prioriza el estado más restrictivo: red > yellow > green.
     """
     raw = ZoneState.get_all_states() or {}
-    out: Dict[str, str] = {}
+    merged: Dict[str, str] = {}
+    rank = {"red": 3, "yellow": 2, "green": 1}
     for name, data in raw.items():
-        if isinstance(data, dict):
-            st = data.get("state") or data.get("color") or "green"
+        st = (data.get("state") if isinstance(data, dict) else str(data) or "green").lower()
+        aliased = _alias_name(name)
+        if aliased in merged:
+            if rank.get(st, 0) > rank.get(merged[aliased], 0):
+                merged[aliased] = st
         else:
-            st = str(data)
-        out[name] = str(st).lower()
-    return out
+            merged[aliased] = st
+    return merged
 
 def _seed_if_empty():
     """Si la tabla está vacía, inicializa todas las zonas en 'green'."""
@@ -71,9 +102,9 @@ def _pick_geojson_file() -> str:
 
     here = Path(__file__).resolve()
     bases = [
-        here.parents[1] / "static" / "assets",
-        here.parents[2] / "src" / "static" / "assets",
-        here.parents[2] / "static" / "assets",
+        here.parents[1] / "static" / "assets",           # src/static/assets
+        here.parents[2] / "src" / "static" / "assets",   # /opt/render/project/src/src/static/assets
+        here.parents[2] / "static" / "assets",           # /opt/render/project/src/static/assets
     ]
     patterns = ["combined_polygons.geojson", "*.geojson"]
 
@@ -112,7 +143,7 @@ def download_report():
         states_map = _build_states_simple_map()
         geojson_path = _pick_geojson_file()
 
-        # Construir lista de municipios a partir de DB
+        # Construir lista de municipios a partir de DB (ya deduplicada)
         def _state_label(s: str) -> str:
             return (
                 "Habilitado" if s == "green" else
@@ -131,7 +162,7 @@ def download_report():
             gen = ReporteEstadoMunicipios(logo_path=LOGO_PATH)
             gen.generar_pdf(
                 nombre_archivo=tmp_pdf.name,
-                municipios=municipios,      # 👈 PASAMOS TODOS LOS MUNICIPIOS REALES
+                municipios=municipios,      # TODOS los municipios reales (ya fusionados)
                 states_map=states_map,
                 geojson_path=geojson_path,
                 draw_labels=True,
@@ -139,10 +170,12 @@ def download_report():
             )
             pdf_path = tmp_pdf.name
 
+        # Nombre de archivo con TZ local
+        now = datetime.now(ZoneInfo(REPORT_TZ))
         return send_file(
             pdf_path,
             as_attachment=True,
-            download_name=f'reporte_camineria_cerro_largo_{datetime.now():%Y%m%d_%H%M%S}.pdf',
+            download_name=f'reporte_camineria_cerro_largo_{now:%Y%m%d_%H%M%S}.pdf',
             mimetype='application/pdf'
         )
 
