@@ -101,7 +101,6 @@ def _draw_legend(ax, anchor=(0.02, 0.02), box_alpha=0.85, fontsize=7):
         mpatches.Patch(color=STATE_COLORS["green"],  label="Habilitado"),
         mpatches.Patch(color=STATE_COLORS["yellow"], label="Precaución"),
         mpatches.Patch(color=STATE_COLORS["red"],    label="Cerrado"),
-        mpatches.Patch(color=STATE_COLORS["unknown"],label="Desconocido"),
     ]
     leg = ax.legend(
         handles=patches,
