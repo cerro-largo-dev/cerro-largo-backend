@@ -8,6 +8,7 @@ Endpoint de descarga de reporte:
 - Busca el GeoJSON en src/static/assets o por GEOJSON_PATH (ENV).
 - Normaliza y fusiona alias de zonas (MELO (GEB)->MANGRULLO, MELO (GCB)->LA MICAELA).
 - Usa zona horaria America/Montevideo para el nombre del archivo (REPORT_TZ).
+- Fallback si la BD falla: genera estados en 'green' para todas las zonas.
 """
 
 import os
@@ -60,14 +61,28 @@ def _alias_name(name: str) -> str:
 
 # --------------------------- Utilidades de datos ---------------------------
 
+_DEF_ZONAS = [
+    'ACEGUÁ','ARBOLITO','ARÉVALO','BAÑADO DE MEDINA','CENTURIÓN',
+    'CERRO DE LAS CUENTAS','FRAILE MUERTO','ISIDORO NOBLÍA',
+    'LA MICAELA','LAGUNA MERÍN','LAS CAÑAS','MANGRULLO',
+    'PLÁCIDO ROSAS','QUEBRACHO','RAMÓN TRIGO','RÍO BRANCO',
+    'TRES ISLAS','TUPAMBAÉ','MELO (GBA)','MELO (GBB)','MELO (GBC)',
+]
+
 def _build_states_simple_map() -> Dict[str, str]:
     """
     Devuelve { 'ZONA': 'green|yellow|red', ... } a partir del modelo ZoneState.
     - Soporta {'ZONA': 'green'} o {'ZONA': {'state': 'green', ...}}.
     - Normaliza nombres y fusiona alias (GEB/GCB).
     - Si hay duplicados, prioriza el estado más restrictivo: red > yellow > green.
+    - Si la BD falla, devuelve fallback con todas las zonas en 'green'.
     """
-    raw = ZoneState.get_all_states() or {}
+    try:
+        raw = ZoneState.get_all_states() or {}
+    except Exception as e:
+        log.exception("[report] Error leyendo estados desde BD, uso fallback green: %s", e)
+        return {z: 'green' for z in _DEF_ZONAS}
+
     merged: Dict[str, str] = {}
     rank = {"red": 3, "yellow": 2, "green": 1}
     for name, data in raw.items():
@@ -81,18 +96,14 @@ def _build_states_simple_map() -> Dict[str, str]:
     return merged
 
 def _seed_if_empty():
-    """Si la tabla está vacía, inicializa todas las zonas en 'green'."""
-    if ZoneState.get_all_states():
-        return
-    zonas = [
-        'ACEGUÁ','ARBOLITO','ARÉVALO','BAÑADO DE MEDINA','CENTURIÓN',
-        'CERRO DE LAS CUENTAS','FRAILE MUERTO','ISIDORO NOBLÍA',
-        'LA MICAELA','LAGUNA MERÍN','LAS CAÑAS','MANGRULLO',
-        'PLÁCIDO ROSAS','QUEBRACHO','RAMÓN TRIGO','RÍO BRANCO',
-        'TRES ISLAS','TUPAMBAÉ','MELO (GBA)','MELO (GBB)','MELO (GBC)',
-    ]
-    for z in zonas:
-        ZoneState.update_zone_state(z, 'green', updated_by='sistema')
+    """Si la tabla está vacía, inicializa todas las zonas en 'green'. Ignora errores de BD."""
+    try:
+        if ZoneState.get_all_states():
+            return
+        for z in _DEF_ZONAS:
+            ZoneState.update_zone_state(z, 'green', updated_by='sistema')
+    except Exception as e:
+        log.warning("[report] No se pudo hacer seed de estados (BD no disponible): %s", e)
 
 def _pick_geojson_file() -> str:
     """Selecciona el GeoJSON a usar para el render del mapa."""
@@ -133,17 +144,19 @@ def download_report():
     """
     Genera y descarga un PDF usando ReporteEstadoMunicipios:
     - Logo
-    - Título / Subtítulo / Fecha
+    - Título / Fecha
     - Tabla de estados (TODOS los municipios)
     - Leyenda
     - Mapa estático
     """
     try:
+        # No romper si la BD no responde
         _seed_if_empty()
+
         states_map = _build_states_simple_map()
         geojson_path = _pick_geojson_file()
 
-        # Construir lista de municipios a partir de DB (ya deduplicada)
+        # Construir lista de municipios a partir de estados (ya deduplicados y aliased)
         def _state_label(s: str) -> str:
             return (
                 "Habilitado" if s == "green" else
@@ -162,7 +175,7 @@ def download_report():
             gen = ReporteEstadoMunicipios(logo_path=LOGO_PATH)
             gen.generar_pdf(
                 nombre_archivo=tmp_pdf.name,
-                municipios=municipios,      # TODOS los municipios reales (ya fusionados)
+                municipios=municipios,      # TODOS los municipios reales (o fallback)
                 states_map=states_map,
                 geojson_path=geojson_path,
                 draw_labels=True,
